@@ -4,6 +4,7 @@ from typing import Any, Callable, Optional, Sequence
 import json
 import logging
 
+
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
@@ -18,7 +19,11 @@ from homeassistant.const import UnitOfTemperature, UnitOfTime
 from .const import DOMAIN, SIGNAL_UPDATE, CONF_ROOM_TARGET
 
 
+
+
 _LOGGER = logging.getLogger(__name__)
+
+
 
 
 @dataclass(frozen=True)
@@ -30,6 +35,8 @@ class SensorDefinition:
     state_class: str | None = None
     options: Sequence[str] | None = None
     suggested_display_precision: int | None = None
+
+
 
 
 # Маппинг действий для last_action_text
@@ -58,8 +65,13 @@ ACTION_MAPPING = {
 }
 
 
+
+
 # Доступные действия для ENUM сенсора
-LAST_ACTION_OPTIONS = sorted(set(ACTION_MAPPING.values()))
+# ИСПРАВЛЕНО: добавлено значение "unknown" в список опций
+LAST_ACTION_OPTIONS = sorted(set(ACTION_MAPPING.values()) | {"unknown"})
+
+
 
 
 SENSORS = (
@@ -141,6 +153,8 @@ SENSORS = (
 )
 
 
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -155,12 +169,15 @@ async def async_setup_entry(
     async_add_entities(entities)
 
 
+
+
 class SmartOffsetDebugSensor(SensorEntity):
     """Сенсор для отладки Smart Offset Thermostat."""
     
     _attr_has_entity_name = True
     _attr_entity_registry_enabled_default = True
     _attr_should_poll = False
+
 
     def __init__(
         self,
@@ -189,6 +206,7 @@ class SmartOffsetDebugSensor(SensorEntity):
         
         self._unsub: Optional[Callable[[], None]] = None
 
+
     @property
     def device_info(self) -> DeviceInfo:
         """Информация об устройстве."""
@@ -198,6 +216,7 @@ class SmartOffsetDebugSensor(SensorEntity):
             manufacturer="Custom",
             model="Smart Offset Thermostat",
         )
+
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -228,6 +247,7 @@ class SmartOffsetDebugSensor(SensorEntity):
             })
         
         return attrs
+
 
     @property
     def native_value(self):
@@ -331,6 +351,7 @@ class SmartOffsetDebugSensor(SensorEntity):
         
         return None
 
+
     async def async_added_to_hass(self) -> None:
         """Вызывается при добавлении сенсора в Home Assistant."""
         @callback
@@ -347,6 +368,7 @@ class SmartOffsetDebugSensor(SensorEntity):
         
         # Первоначальное обновление
         self.async_write_ha_state()
+
 
     async def async_will_remove_from_hass(self) -> None:
         """Вызывается при удалении сенсора из Home Assistant."""
