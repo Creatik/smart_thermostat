@@ -1,0 +1,98 @@
+{
+  "title": "Smart Offset Thermostat",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Smart Offset Thermostat",
+        "description": "Wybierz termostat, czujnik temperatury w pomieszczeniu (oraz opcjonalnie czujnik okna) i docelową temperaturę.",
+        "data": {
+          "climate_entity": "Termostat",
+          "room_sensor_entity": "Zewnętrzny czujnik temperatury pomieszczenia",
+          "room_target": "Temperatura docelowa pomieszczenia",
+          "window_sensor_entities": "Czujnik okna (binary_sensor, opcjonalnie)"
+        }
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Opcje sterowania",
+        "description": "Dostosuj zachowanie sterownika.",
+        "data": {
+          "interval_sec": "Interwał sterowania (sekundy)",
+          "deadband": "Martwa strefa (°C)",
+          "step_max": "Maks. zmiana na krok (°C)",
+          "step_min": "Krok zaokrąglania (°C)",
+          "learn_rate": "Współczynnik uczenia",
+          "trv_min": "Min. nastawa termostatu (°C)",
+          "trv_max": "Maks. nastawa termostatu (°C)",
+          "cooldown_sec": "Czas blokady między zmianami (sekundy)",
+          "boost_duration_sec": "Czas boost (sekundy)",
+          "enable_learning": "Włącz uczenie",
+          "stuck_enable": "Adaptacyjna korekta przegrzania (obniża nastawę, jeśli pomieszczenie pozostaje zbyt ciepłe)",
+          "stuck_seconds": "Okno oceny przegrzania (sekundy)",
+          "stuck_min_drop": "Wymagane schłodzenie w oknie (°C)",
+          "stuck_step": "Dodatkowy krok obniżenia przy przegrzaniu (°C)",
+          "window_sensor_entities": "Czujnik okna (binary_sensor, opcjonalnie)"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "error": {
+        "name": "Błąd sterowania"
+      },
+      "offset": {
+        "name": "Nauczony offset"
+      },
+      "target_trv": {
+        "name": "Obliczona nastawa termostatu"
+      },
+      "last_set": {
+        "name": "Ostatnio ustawiona nastawa termostatu"
+      },
+      "last_action": {
+        "name": "Ostatnia decyzja (kod)"
+      },
+      "last_action_text": {
+        "name": "Ostatnia decyzja",
+        "state": {
+          "init": "Inicjalizacja",
+          "deadband": "W martwej strefie (bez zmiany)",
+          "deadband_rebase": "Nastawa zmieniona (linia bazowa ustawiona)",
+          "cooldown": "Blokada aktywna (bez zmiany)",
+          "set_temperature": "Nastawa wysłana do termostatu",
+          "skipped_no_change": "Nie trzeba zmiany",
+          "skipped_unavailable_entities": "Encje niedostępne",
+          "skipped_invalid_room_temp": "Temperatura pomieszczenia nieprawidłowa",
+          "boost": "Boost aktywny (maks. moc grzewcza)",
+          "window_open": "Okno otwarte (obniżone)",
+          "stuck_overtemp_down": "Przegrzanie: dodatkowo obniżone",
+          "reset_offset": "Offset zresetowany"
+        }
+      },
+      "change_count": {
+        "name": "Liczba zmian nastawy"
+      },
+      "window_state": {
+        "name": "Status okna"
+      },
+      "boost_remaining": {
+        "name": "Pozostały czas boost"
+      },
+      "boost_active": {
+        "name": "Boost aktywny"
+      },
+      "control_paused": {
+        "name": "Sterowanie wstrzymane"
+      }
+    },
+    "button": {
+      "reset_offset": {
+        "name": "Resetuj offset"
+      }
+    }
+  }
+}

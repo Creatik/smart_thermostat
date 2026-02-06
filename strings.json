@@ -1,0 +1,98 @@
+{
+  "title": "Smart Offset Thermostat",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Smart Offset Thermostat",
+        "description": "Select thermostat, room sensor and the desired room temperature.",
+        "data": {
+          "climate_entity": "Thermostat",
+          "room_sensor_entity": "Room temperature sensor",
+          "room_target": "Room target temperature",
+          "window_sensor_entities": "Window sensors (optional, multiple)"
+        }
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Control options",
+        "description": "Fine-tune how the controller behaves.",
+        "data": {
+          "interval_sec": "Control interval (seconds)",
+          "deadband": "Deadband (°C)",
+          "step_max": "Max change per step (°C)",
+          "step_min": "Rounding step (°C)",
+          "learn_rate": "Learning rate",
+          "trv_min": "Min thermostat setpoint (°C)",
+          "trv_max": "Max thermostat setpoint (°C)",
+          "cooldown_sec": "Cooldown between changes (seconds)",
+          "enable_learning": "Enable learning",
+          "boost_duration_sec": "Boost duration (seconds)",
+          "stuck_enable": "Adaptive over-temp correction (reduce setpoint if room stays too warm)",
+          "stuck_seconds": "Over-temp evaluation window (seconds)",
+          "stuck_min_drop": "Required cooling within window (°C)",
+          "stuck_step": "Extra reduction step when too warm (°C)",
+          "window_sensor_entities": "Window sensors (optional, multiple)"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "error": {
+        "name": "Control error"
+      },
+      "offset": {
+        "name": "Learned offset"
+      },
+      "target_trv": {
+        "name": "Calculated thermostat setpoint"
+      },
+      "last_set": {
+        "name": "Last set thermostat setpoint"
+      },
+      "last_action": {
+        "name": "Last decision (code)"
+      },
+      "last_action_text": {
+        "name": "Last decision",
+        "state": {
+          "init": "Initialization",
+          "deadband": "In deadband (no change)",
+          "deadband_rebase": "Setpoint changed (baseline set)",
+          "cooldown": "Cooldown active (no change)",
+          "set_temperature": "Setpoint sent to thermostat",
+          "skipped_no_change": "No change needed",
+          "skipped_unavailable_entities": "Entities unavailable",
+          "skipped_invalid_room_temp": "Room temperature invalid",
+          "boost": "Boost active (max heating power)",
+          "window_open": "Window open (reduced)",
+          "stuck_overtemp_down": "Over-temperature: additionally reduced",
+          "reset_offset": "Offset reset"
+        }
+      },
+      "change_count": {
+        "name": "Number of setpoint changes"
+      },
+      "window_state": {
+        "name": "Window state"
+      },
+      "boost_remaining": {
+        "name": "Boost remaining time"
+      },
+      "boost_active": {
+        "name": "Boost active"
+      },
+      "control_paused": {
+        "name": "Control paused"
+      }
+    },
+    "button": {
+      "reset_offset": {
+        "name": "Reset offset"
+      }
+    }
+  }
+}

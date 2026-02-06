@@ -1,0 +1,98 @@
+{
+  "title": "Smart Offset Thermostat",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Smart Offset Thermostat",
+        "description": "Selecione o termóstato, o sensor de temperatura da divisão (e opcionalmente o sensor de janela) e a temperatura desejada.",
+        "data": {
+          "climate_entity": "Termóstato",
+          "room_sensor_entity": "Sensor externo de temperatura da divisão",
+          "room_target": "Temperatura alvo da divisão",
+          "window_sensor_entities": "Sensor de janela (binary_sensor, opcional)"
+        }
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Opções de controlo",
+        "description": "Ajuste o comportamento do controlador.",
+        "data": {
+          "interval_sec": "Intervalo de controlo (segundos)",
+          "deadband": "Zona morta (°C)",
+          "step_max": "Alteração máx. por passo (°C)",
+          "step_min": "Passo de arredondamento (°C)",
+          "learn_rate": "Taxa de aprendizagem",
+          "trv_min": "Setpoint mínimo do termóstato (°C)",
+          "trv_max": "Setpoint máximo do termóstato (°C)",
+          "cooldown_sec": "Tempo de espera entre alterações (segundos)",
+          "boost_duration_sec": "Duração do boost (segundos)",
+          "enable_learning": "Ativar aprendizagem",
+          "stuck_enable": "Correção adaptativa de sobretemperatura (reduz a consigna se a divisão continuar demasiado quente)",
+          "stuck_seconds": "Janela de avaliação de sobretemperatura (segundos)",
+          "stuck_min_drop": "Arrefecimento necessário na janela (°C)",
+          "stuck_step": "Passo extra de redução em sobretemperatura (°C)",
+          "window_sensor_entities": "Sensor de janela (binary_sensor, opcional)"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "error": {
+        "name": "Erro de controlo"
+      },
+      "offset": {
+        "name": "Offset aprendido"
+      },
+      "target_trv": {
+        "name": "Setpoint calculado do termóstato"
+      },
+      "last_set": {
+        "name": "Último setpoint definido no termóstato"
+      },
+      "last_action": {
+        "name": "Última decisão (código)"
+      },
+      "last_action_text": {
+        "name": "Última decisão",
+        "state": {
+          "init": "Inicialização",
+          "deadband": "Na zona morta (sem alteração)",
+          "deadband_rebase": "Setpoint alterado (linha de base definida)",
+          "cooldown": "Tempo de espera ativo (sem alteração)",
+          "set_temperature": "Setpoint enviado ao termóstato",
+          "skipped_no_change": "Nenhuma alteração necessária",
+          "skipped_unavailable_entities": "Entidades indisponíveis",
+          "skipped_invalid_room_temp": "Temperatura da divisão inválida",
+          "boost": "Boost ativo (potência máxima de aquecimento)",
+          "window_open": "Janela aberta (reduzido)",
+          "stuck_overtemp_down": "Sobretemperatura: adicionalmente reduzido",
+          "reset_offset": "Offset reiniciado"
+        }
+      },
+      "change_count": {
+        "name": "Número de alterações de setpoint"
+      },
+      "window_state": {
+        "name": "Estado da janela"
+      },
+      "boost_remaining": {
+        "name": "Tempo restante de boost"
+      },
+      "boost_active": {
+        "name": "Boost ativo"
+      },
+      "control_paused": {
+        "name": "Controlo pausado"
+      }
+    },
+    "button": {
+      "reset_offset": {
+        "name": "Reiniciar offset"
+      }
+    }
+  }
+}

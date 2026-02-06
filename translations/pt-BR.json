@@ -1,0 +1,98 @@
+{
+  "title": "Smart Offset Thermostat",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Smart Offset Thermostat",
+        "description": "Selecione o termostato, o sensor de temperatura do ambiente (e opcionalmente o sensor de janela) e a temperatura desejada.",
+        "data": {
+          "climate_entity": "Termostato",
+          "room_sensor_entity": "Sensor externo de temperatura do ambiente",
+          "room_target": "Temperatura alvo do ambiente",
+          "window_sensor_entities": "Sensor de janela (binary_sensor, opcional)"
+        }
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Opções de controle",
+        "description": "Ajuste o comportamento do controlador.",
+        "data": {
+          "interval_sec": "Intervalo de controle (segundos)",
+          "deadband": "Faixa morta (°C)",
+          "step_max": "Mudança máx. por passo (°C)",
+          "step_min": "Passo de arredondamento (°C)",
+          "learn_rate": "Taxa de aprendizado",
+          "trv_min": "Setpoint mínimo do termostato (°C)",
+          "trv_max": "Setpoint máximo do termostato (°C)",
+          "cooldown_sec": "Pausa entre mudanças (segundos)",
+          "boost_duration_sec": "Duração do boost (segundos)",
+          "enable_learning": "Ativar aprendizado",
+          "stuck_enable": "Correção adaptativa de sobretemperatura (reduz a meta se o ambiente continuar quente demais)",
+          "stuck_seconds": "Janela de avaliação de sobretemperatura (segundos)",
+          "stuck_min_drop": "Resfriamento necessário na janela (°C)",
+          "stuck_step": "Passo extra de redução em sobretemperatura (°C)",
+          "window_sensor_entities": "Sensor de janela (binary_sensor, opcional)"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "error": {
+        "name": "Erro de controle"
+      },
+      "offset": {
+        "name": "Offset aprendido"
+      },
+      "target_trv": {
+        "name": "Setpoint calculado do termostato"
+      },
+      "last_set": {
+        "name": "Último setpoint definido no termostato"
+      },
+      "last_action": {
+        "name": "Última decisão (código)"
+      },
+      "last_action_text": {
+        "name": "Última decisão",
+        "state": {
+          "init": "Inicialização",
+          "deadband": "Na faixa morta (sem alteração)",
+          "deadband_rebase": "Setpoint alterado (linha de base definida)",
+          "cooldown": "Pausa ativa (sem alteração)",
+          "set_temperature": "Setpoint enviado ao termostato",
+          "skipped_no_change": "Nenhuma alteração necessária",
+          "skipped_unavailable_entities": "Entidades indisponíveis",
+          "skipped_invalid_room_temp": "Temperatura do ambiente inválida",
+          "boost": "Boost ativo (potência máxima de aquecimento)",
+          "window_open": "Janela aberta (reduzido)",
+          "stuck_overtemp_down": "Sobretemperatura: adicionalmente reduzido",
+          "reset_offset": "Offset resetado"
+        }
+      },
+      "change_count": {
+        "name": "Número de alterações de setpoint"
+      },
+      "window_state": {
+        "name": "Estado da janela"
+      },
+      "boost_remaining": {
+        "name": "Tempo restante de boost"
+      },
+      "boost_active": {
+        "name": "Boost ativo"
+      },
+      "control_paused": {
+        "name": "Controle pausado"
+      }
+    },
+    "button": {
+      "reset_offset": {
+        "name": "Resetar offset"
+      }
+    }
+  }
+}
