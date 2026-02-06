@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import voluptuous as vol
 
 from homeassistant import config_entries
@@ -12,7 +13,7 @@ from homeassistant.helpers.selector import (
     NumberSelectorMode,
     BooleanSelector,
 )
-from homeassistant.const import CONF_NAME  # если захочешь переименовать
+from homeassistant.const import CONF_NAME
 
 from .const import (
     DOMAIN,
@@ -25,7 +26,8 @@ from .const import (
     CONF_DEADBAND,
     CONF_STEP_MAX,
     CONF_STEP_MIN,
-    CONF_LEARN_RATE,
+    CONF_LEARN_RATE_FAST,
+    CONF_LEARN_RATE_SLOW,
     CONF_TRV_MIN,
     CONF_TRV_MAX,
     CONF_COOLDOWN_SEC,
@@ -35,39 +37,17 @@ from .const import (
     CONF_STUCK_SECONDS,
     CONF_STUCK_MIN_DROP,
     CONF_STUCK_STEP,
-    DEFAULT_INTERVAL_SEC,
-    DEFAULT_DEADBAND,
-    DEFAULT_STEP_MAX,
-    DEFAULT_STEP_MIN,
-    DEFAULT_LEARN_RATE,
-    DEFAULT_TRV_MIN,
-    DEFAULT_TRV_MAX,
-    DEFAULT_COOLDOWN_SEC,
-    DEFAULT_BOOST_DURATION_SEC,
-    DEFAULT_ENABLE_LEARNING,
-    DEFAULT_STUCK_ENABLE,
-    DEFAULT_STUCK_SECONDS,
-    DEFAULT_STUCK_MIN_DROP,
-    DEFAULT_STUCK_STEP,
+    CONF_MIN_OFFSET_CHANGE,
+    CONF_NO_LEARN_SUMMER,
+    CONF_WINDOW_OPEN_NO_LEARN_MIN,
+    CONF_HEATING_ALPHA,
+    CONF_OVERSHOOT_THRESHOLD,
+    CONF_PREDICT_MINUTES,
+    DEFAULTS,
 )
 
-# Явные дефолты (если в const.py их нет — используй эти)
-DEFAULTS = {
-    CONF_INTERVAL_SEC: DEFAULT_INTERVAL_SEC or 300,
-    CONF_DEADBAND: DEFAULT_DEADBAND or 0.3,
-    CONF_STEP_MAX: DEFAULT_STEP_MAX or 1.0,
-    CONF_STEP_MIN: DEFAULT_STEP_MIN or 0.5,
-    CONF_LEARN_RATE: DEFAULT_LEARN_RATE or 0.05,
-    CONF_TRV_MIN: DEFAULT_TRV_MIN or 5.0,
-    CONF_TRV_MAX: DEFAULT_TRV_MAX or 30.0,
-    CONF_COOLDOWN_SEC: DEFAULT_COOLDOWN_SEC or 120,
-    CONF_BOOST_DURATION_SEC: DEFAULT_BOOST_DURATION_SEC or 600,
-    CONF_ENABLE_LEARNING: DEFAULT_ENABLE_LEARNING or True,
-    CONF_STUCK_ENABLE: DEFAULT_STUCK_ENABLE or True,
-    CONF_STUCK_SECONDS: DEFAULT_STUCK_SECONDS or 1800,
-    CONF_STUCK_MIN_DROP: DEFAULT_STUCK_MIN_DROP or 0.3,
-    CONF_STUCK_STEP: DEFAULT_STUCK_STEP or 0.5,
-}
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class SmartOffsetThermostatConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -88,22 +68,44 @@ class SmartOffsetThermostatConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     and entry.data.get(CONF_ROOM_SENSOR) == user_input[CONF_ROOM_SENSOR]
                 ):
                     errors["base"] = "already_configured"
+                    _LOGGER.warning(
+                        "Попытка создать дублирующую конфигурацию: %s + %s",
+                        user_input[CONF_CLIMATE], user_input[CONF_ROOM_SENSOR]
+                    )
                     break
 
             if not errors:
                 # Формируем красивое название
-                title = f"Smart Offset: {user_input[CONF_CLIMATE].split('.')[-1]} ↔ {user_input[CONF_ROOM_SENSOR].split('.')[-1]}"
+                climate_name = user_input[CONF_CLIMATE].split('.')[-1]
+                sensor_name = user_input[CONF_ROOM_SENSOR].split('.')[-1]
+                title = f"Smart Offset: {climate_name} ↔ {sensor_name}"
+                
+                _LOGGER.info(
+                    "Создание новой конфигурации: %s (термостат: %s, датчик: %s)",
+                    title, user_input[CONF_CLIMATE], user_input[CONF_ROOM_SENSOR]
+                )
+                
                 return self.async_create_entry(title=title, data=user_input)
 
+        # Схема для первого шага
         schema = vol.Schema({
             vol.Required(CONF_CLIMATE): EntitySelector(
-                EntitySelectorConfig(domain="climate")
+                EntitySelectorConfig(
+                    domain="climate",
+                    multiple=False
+                )
             ),
             vol.Required(CONF_ROOM_SENSOR): EntitySelector(
-                EntitySelectorConfig(domain="sensor")
+                EntitySelectorConfig(
+                    domain="sensor",
+                    multiple=False
+                )
             ),
             vol.Optional(CONF_WINDOW_SENSORS): EntitySelector(
-                EntitySelectorConfig(domain="binary_sensor", multiple=True)
+                EntitySelectorConfig(
+                    domain="binary_sensor",
+                    multiple=True
+                )
             ),
             vol.Required(
                 CONF_ROOM_TARGET,
@@ -136,108 +138,275 @@ class SmartOffsetThermostatOptionsFlow(config_entries.OptionsFlow):
     def __init__(self, config_entry: config_entries.ConfigEntry):
         """Инициализация."""
         self.config_entry = config_entry
+        _LOGGER.debug("Инициализация потока опций для записи %s", config_entry.entry_id)
 
     async def async_step_init(self, user_input=None):
         """Первый (и единственный) шаг опций."""
         if user_input is not None:
-            # Сохраняем только изменённые опции
+            # Логируем изменения
+            changed_keys = []
+            for key, value in user_input.items():
+                old_value = self.config_entry.options.get(key)
+                if old_value != value:
+                    changed_keys.append(key)
+            
+            if changed_keys:
+                _LOGGER.info(
+                    "Изменены опции для записи %s: %s",
+                    self.config_entry.entry_id, changed_keys
+                )
+            
+            # Сохраняем опции
             return self.async_create_entry(title="", data=user_input)
 
+        # Получаем текущие опции
         opts = self.config_entry.options
-
+        
         # Обратная совместимость: старый CONF_WINDOW_SENSOR → новый CONF_WINDOW_SENSORS
         window_defaults = opts.get(CONF_WINDOW_SENSORS, [])
         if not window_defaults:
             old_single = opts.get(CONF_WINDOW_SENSOR)
             if old_single:
-                window_defaults = [old_single] if isinstance(old_single, str) else old_single
+                if isinstance(old_single, str):
+                    window_defaults = [old_single]
+                elif isinstance(old_single, list):
+                    window_defaults = old_single
+                _LOGGER.debug(
+                    "Миграция window_sensor -> window_sensors для записи %s: %s",
+                    self.config_entry.entry_id, window_defaults
+                )
 
+        # Вспомогательная функция для получения значения с fallback
+        def get_option(key, default=None):
+            """Получить значение опции с fallback на DEFAULTS."""
+            value = opts.get(key)
+            if value is not None:
+                return value
+            return DEFAULTS.get(key, default)
+
+        # Схема для опций
         schema = vol.Schema({
+            # Основные параметры
             vol.Optional(
                 CONF_WINDOW_SENSORS,
                 default=window_defaults
             ): EntitySelector(
                 EntitySelectorConfig(domain="binary_sensor", multiple=True)
             ),
+            
             vol.Optional(
                 CONF_INTERVAL_SEC,
-                default=opts.get(CONF_INTERVAL_SEC, DEFAULTS[CONF_INTERVAL_SEC])
+                default=get_option(CONF_INTERVAL_SEC)
             ): NumberSelector(
-                NumberSelectorConfig(min=60, max=1800, step=10, mode=NumberSelectorMode.BOX, unit_of_measurement="s")
+                NumberSelectorConfig(
+                    min=60, max=1800, step=10,
+                    mode=NumberSelectorMode.BOX,
+                    unit_of_measurement="s"
+                )
             ),
+            
             vol.Optional(
                 CONF_DEADBAND,
-                default=opts.get(CONF_DEADBAND, DEFAULTS[CONF_DEADBAND])
+                default=get_option(CONF_DEADBAND)
             ): NumberSelector(
-                NumberSelectorConfig(min=0.0, max=2.0, step=0.1, mode=NumberSelectorMode.BOX, unit_of_measurement="°C")
+                NumberSelectorConfig(
+                    min=0.0, max=2.0, step=0.1,
+                    mode=NumberSelectorMode.BOX,
+                    unit_of_measurement="°C"
+                )
             ),
+            
             vol.Optional(
                 CONF_STEP_MAX,
-                default=opts.get(CONF_STEP_MAX, DEFAULTS[CONF_STEP_MAX])
+                default=get_option(CONF_STEP_MAX)
             ): NumberSelector(
-                NumberSelectorConfig(min=0.1, max=5.0, step=0.1, mode=NumberSelectorMode.BOX, unit_of_measurement="°C")
+                NumberSelectorConfig(
+                    min=0.1, max=5.0, step=0.1,
+                    mode=NumberSelectorMode.BOX,
+                    unit_of_measurement="°C"
+                )
             ),
+            
             vol.Optional(
                 CONF_STEP_MIN,
-                default=opts.get(CONF_STEP_MIN, DEFAULTS[CONF_STEP_MIN])
+                default=get_option(CONF_STEP_MIN)
             ): NumberSelector(
-                NumberSelectorConfig(min=0.05, max=2.0, step=0.05, mode=NumberSelectorMode.BOX, unit_of_measurement="°C")
+                NumberSelectorConfig(
+                    min=0.05, max=2.0, step=0.05,
+                    mode=NumberSelectorMode.BOX,
+                    unit_of_measurement="°C"
+                )
             ),
+            
+            # Параметры обучения
             vol.Optional(
-                CONF_LEARN_RATE,
-                default=opts.get(CONF_LEARN_RATE, DEFAULTS[CONF_LEARN_RATE])
+                CONF_LEARN_RATE_FAST,
+                default=get_option(CONF_LEARN_RATE_FAST)
             ): NumberSelector(
-                NumberSelectorConfig(min=0.0, max=1.0, step=0.01, mode=NumberSelectorMode.BOX)
+                NumberSelectorConfig(
+                    min=0.0, max=1.0, step=0.01,
+                    mode=NumberSelectorMode.BOX
+                )
             ),
+            
             vol.Optional(
-                CONF_TRV_MIN,
-                default=opts.get(CONF_TRV_MIN, DEFAULTS[CONF_TRV_MIN])
+                CONF_LEARN_RATE_SLOW,
+                default=get_option(CONF_LEARN_RATE_SLOW)
             ): NumberSelector(
-                NumberSelectorConfig(min=5.0, max=25.0, step=0.5, mode=NumberSelectorMode.BOX, unit_of_measurement="°C")
+                NumberSelectorConfig(
+                    min=0.0, max=1.0, step=0.01,
+                    mode=NumberSelectorMode.BOX
+                )
             ),
+            
             vol.Optional(
-                CONF_TRV_MAX,
-                default=opts.get(CONF_TRV_MAX, DEFAULTS[CONF_TRV_MAX])
+                CONF_MIN_OFFSET_CHANGE,
+                default=get_option(CONF_MIN_OFFSET_CHANGE)
             ): NumberSelector(
-                NumberSelectorConfig(min=15.0, max=35.0, step=0.5, mode=NumberSelectorMode.BOX, unit_of_measurement="°C")
+                NumberSelectorConfig(
+                    min=0.0, max=1.0, step=0.05,
+                    mode=NumberSelectorMode.BOX,
+                    unit_of_measurement="°C"
+                )
             ),
-            vol.Optional(
-                CONF_COOLDOWN_SEC,
-                default=opts.get(CONF_COOLDOWN_SEC, DEFAULTS[CONF_COOLDOWN_SEC])
-            ): NumberSelector(
-                NumberSelectorConfig(min=0, max=3600, step=30, mode=NumberSelectorMode.BOX, unit_of_measurement="s")
-            ),
-            vol.Optional(
-                CONF_BOOST_DURATION_SEC,
-                default=opts.get(CONF_BOOST_DURATION_SEC, DEFAULTS[CONF_BOOST_DURATION_SEC])
-            ): NumberSelector(
-                NumberSelectorConfig(min=30, max=7200, step=30, mode=NumberSelectorMode.BOX, unit_of_measurement="s")
-            ),
+            
             vol.Optional(
                 CONF_ENABLE_LEARNING,
-                default=opts.get(CONF_ENABLE_LEARNING, DEFAULTS[CONF_ENABLE_LEARNING])
+                default=get_option(CONF_ENABLE_LEARNING)
             ): BooleanSelector(),
+            
+            vol.Optional(
+                CONF_NO_LEARN_SUMMER,
+                default=get_option(CONF_NO_LEARN_SUMMER)
+            ): BooleanSelector(),
+            
+            vol.Optional(
+                CONF_WINDOW_OPEN_NO_LEARN_MIN,
+                default=get_option(CONF_WINDOW_OPEN_NO_LEARN_MIN)
+            ): NumberSelector(
+                NumberSelectorConfig(
+                    min=0, max=1440, step=5,
+                    mode=NumberSelectorMode.BOX,
+                    unit_of_measurement="min"
+                )
+            ),
+            
+            # Параметры TRV
+            vol.Optional(
+                CONF_TRV_MIN,
+                default=get_option(CONF_TRV_MIN)
+            ): NumberSelector(
+                NumberSelectorConfig(
+                    min=5.0, max=25.0, step=0.5,
+                    mode=NumberSelectorMode.BOX,
+                    unit_of_measurement="°C"
+                )
+            ),
+            
+            vol.Optional(
+                CONF_TRV_MAX,
+                default=get_option(CONF_TRV_MAX)
+            ): NumberSelector(
+                NumberSelectorConfig(
+                    min=15.0, max=35.0, step=0.5,
+                    mode=NumberSelectorMode.BOX,
+                    unit_of_measurement="°C"
+                )
+            ),
+            
+            vol.Optional(
+                CONF_COOLDOWN_SEC,
+                default=get_option(CONF_COOLDOWN_SEC)
+            ): NumberSelector(
+                NumberSelectorConfig(
+                    min=0, max=3600, step=30,
+                    mode=NumberSelectorMode.BOX,
+                    unit_of_measurement="s"
+                )
+            ),
+            
+            # Параметры boost
+            vol.Optional(
+                CONF_BOOST_DURATION_SEC,
+                default=get_option(CONF_BOOST_DURATION_SEC)
+            ): NumberSelector(
+                NumberSelectorConfig(
+                    min=30, max=7200, step=30,
+                    mode=NumberSelectorMode.BOX,
+                    unit_of_measurement="s"
+                )
+            ),
+            
+            # Параметры stuck detection
             vol.Optional(
                 CONF_STUCK_ENABLE,
-                default=opts.get(CONF_STUCK_ENABLE, DEFAULTS[CONF_STUCK_ENABLE])
+                default=get_option(CONF_STUCK_ENABLE)
             ): BooleanSelector(),
+            
             vol.Optional(
                 CONF_STUCK_SECONDS,
-                default=opts.get(CONF_STUCK_SECONDS, DEFAULTS[CONF_STUCK_SECONDS])
+                default=get_option(CONF_STUCK_SECONDS)
             ): NumberSelector(
-                NumberSelectorConfig(min=300, max=86400, step=60, mode=NumberSelectorMode.BOX, unit_of_measurement="s")
+                NumberSelectorConfig(
+                    min=300, max=86400, step=60,
+                    mode=NumberSelectorMode.BOX,
+                    unit_of_measurement="s"
+                )
             ),
+            
             vol.Optional(
                 CONF_STUCK_MIN_DROP,
-                default=opts.get(CONF_STUCK_MIN_DROP, DEFAULTS[CONF_STUCK_MIN_DROP])
+                default=get_option(CONF_STUCK_MIN_DROP)
             ): NumberSelector(
-                NumberSelectorConfig(min=0.0, max=3.0, step=0.1, mode=NumberSelectorMode.BOX, unit_of_measurement="°C")
+                NumberSelectorConfig(
+                    min=0.0, max=3.0, step=0.1,
+                    mode=NumberSelectorMode.BOX,
+                    unit_of_measurement="°C"
+                )
             ),
+            
             vol.Optional(
                 CONF_STUCK_STEP,
-                default=opts.get(CONF_STUCK_STEP, DEFAULTS[CONF_STUCK_STEP])
+                default=get_option(CONF_STUCK_STEP)
             ): NumberSelector(
-                NumberSelectorConfig(min=0.05, max=5.0, step=0.05, mode=NumberSelectorMode.BOX, unit_of_measurement="°C")
+                NumberSelectorConfig(
+                    min=0.05, max=5.0, step=0.05,
+                    mode=NumberSelectorMode.BOX,
+                    unit_of_measurement="°C"
+                )
+            ),
+            
+            # Параметры overshoot prevention
+            vol.Optional(
+                CONF_HEATING_ALPHA,
+                default=get_option(CONF_HEATING_ALPHA)
+            ): NumberSelector(
+                NumberSelectorConfig(
+                    min=0.01, max=0.5, step=0.01,
+                    mode=NumberSelectorMode.BOX
+                )
+            ),
+            
+            vol.Optional(
+                CONF_OVERSHOOT_THRESHOLD,
+                default=get_option(CONF_OVERSHOOT_THRESHOLD)
+            ): NumberSelector(
+                NumberSelectorConfig(
+                    min=0.1, max=2.0, step=0.1,
+                    mode=NumberSelectorMode.BOX,
+                    unit_of_measurement="°C"
+                )
+            ),
+            
+            vol.Optional(
+                CONF_PREDICT_MINUTES,
+                default=get_option(CONF_PREDICT_MINUTES)
+            ): NumberSelector(
+                NumberSelectorConfig(
+                    min=1, max=60, step=1,
+                    mode=NumberSelectorMode.BOX,
+                    unit_of_measurement="min"
+                )
             ),
         })
 
@@ -254,4 +423,5 @@ class SmartOffsetThermostatOptionsFlow(config_entries.OptionsFlow):
 @staticmethod
 @callback
 def async_get_options_flow(config_entry: config_entries.ConfigEntry):
+    """Получить поток опций для конфигурационной записи."""
     return SmartOffsetThermostatOptionsFlow(config_entry)

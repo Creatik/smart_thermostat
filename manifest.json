@@ -8,5 +8,8 @@
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/fabilau/hass_smart_offset_thermostat/issues",
   "requirements": [],
-  "version": "1.1.28"
+  "version": "1.2.0",
+  "integration_type": "hub",
+  "after_dependencies": ["recorder"],
+  "loggers": ["custom_components.smart_offset_thermostat"]
 }

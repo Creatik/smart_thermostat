@@ -12,6 +12,12 @@
           "window_sensor_entities": "Датчик окна (binary_sensor, опционально)"
         }
       }
+    },
+    "abort": {
+      "already_configured": "Эта комбинация термостата и датчика уже настроена."
+    },
+    "error": {
+      "already_configured": "Эта комбинация термостата и датчика уже настроена."
     }
   },
   "options": {
@@ -24,16 +30,23 @@
           "deadband": "Мёртвая зона (°C)",
           "step_max": "Максимальное изменение за шаг (°C)",
           "step_min": "Шаг округления (°C)",
-          "learn_rate": "Скорость обучения",
+          "learn_rate_fast": "Скорость обучения (быстрая)",
+          "learn_rate_slow": "Скорость обучения (медленная)",
+          "min_offset_change": "Минимальное изменение смещения (°C)",
+          "enable_learning": "Включить обучение",
+          "no_learn_summer": "Не обучаться летом",
+          "window_open_no_learn_min": "Не обучаться при открытом окне (минуты)",
           "trv_min": "Минимальная уставка термостата (°C)",
           "trv_max": "Максимальная уставка термостата (°C)",
           "cooldown_sec": "Пауза между изменениями (секунды)",
-          "boost_duration_sec": "Длительность Boost",
-          "enable_learning": "Включить обучение",
-          "stuck_enable": "Адаптивная коррекция перегрева (снижение уставки, если в комнате остаётся слишком тепло)",
+          "boost_duration_sec": "Длительность Boost (секунды)",
+          "stuck_enable": "Адаптивная коррекция перегрева",
           "stuck_seconds": "Окно оценки перегрева (секунды)",
           "stuck_min_drop": "Требуемое охлаждение за окно (°C)",
           "stuck_step": "Дополнительное снижение при перегреве (°C)",
+          "heating_alpha": "Скорость обучения скорости нагрева",
+          "overshoot_threshold": "Порог перегрева (°C)",
+          "predict_minutes": "Время предсказания перегрева (минуты)",
           "window_sensor_entities": "Датчик окна (binary_sensor, опционально)"
         }
       }
@@ -54,7 +67,7 @@
         "name": "Последняя установленная уставка термостата"
       },
       "last_action": {
-        "name": "Run code"
+        "name": "Код действия"
       },
       "last_action_text": {
         "name": "Последнее решение",
@@ -87,7 +100,11 @@
         "name": "Оставшееся время Boost"
       },
       "boost_active": {
-        "name": "Активен"
+        "name": "Boost",
+        "state": {
+          "on": "Активен",
+          "off": "Не включен"
+        }
       },
       "control_paused": {
         "name": "Принудительное снижение",
@@ -95,11 +112,67 @@
           "on": "Да",
           "off": "Нет"
         }
+      },
+      "history_graph": {
+        "name": "График истории"
+      },
+      "heating_rate": {
+        "name": "Скорость нагрева"
+      },
+      "predicted_time": {
+        "name": "Предсказанное время до цели"
       }
     },
     "button": {
+      "start_boost": {
+        "name": "Запустить Boost"
+      },
       "reset_offset": {
         "name": "Сбросить смещение"
+      }
+    },
+    "number": {
+      "room_target": {
+        "name": "Целевая температура помещения"
+      }
+    },
+    "climate": {
+      "virtual_thermostat": {
+        "name": "Умный термостат"
+      }
+    }
+  },
+  "services": {
+    "reset_offset": {
+      "name": "Сбросить смещение",
+      "description": "Сбросить смещение к нулю",
+      "fields": {
+        "entry_id": {
+          "name": "ID записи",
+          "description": "ID конфигурационной записи"
+        }
+      }
+    },
+    "start_boost": {
+      "name": "Запустить Boost",
+      "description": "Запустить режим максимального нагрева",
+      "fields": {
+        "entry_id": {
+          "name": "ID записи",
+          "description": "ID конфигурационной записи"
+        },
+        "duration": {
+          "name": "Длительность",
+          "description": "Длительность boost в секундах (опционально)"
+        }
+      }
+    }
+  },
+  "state": {
+    "climate": {
+      "hvac_action": {
+        "heating": "Обогрев",
+        "idle": "Бездействует"
       }
     }
   }
