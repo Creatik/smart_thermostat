@@ -47,7 +47,8 @@ CONF_STUCK_STEP = "stuck_step"
 CONF_HEATING_ALPHA = "heating_alpha"
 CONF_OVERSHOOT_THRESHOLD = "overshoot_threshold"
 CONF_PREDICT_MINUTES = "predict_minutes"
-
+CONF_TTT_ALPHA = "ttt_alpha"
+CONF_TTT_SOFT_MIN = "ttt_soft_min"
 # ========== ЗНАЧЕНИЯ ПО УМОЛЧАНИЮ ==========
 
 # Основные параметры управления
@@ -58,6 +59,9 @@ DEFAULT_STEP_MIN = 0.5
 DEFAULT_TRV_MIN = 12.0
 DEFAULT_TRV_MAX = 30.0
 DEFAULT_COOLDOWN_SEC = 600
+
+MIN_OFFSET = -10
+MAX_OFFSET = 10
 
 # Параметры обучения
 DEFAULT_LEARN_RATE_FAST = 0.5

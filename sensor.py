@@ -175,7 +175,7 @@ class SmartOffsetDebugSensor(SensorEntity):
     """Сенсор для отладки Smart Offset Thermostat."""
     
     _attr_has_entity_name = True
-    _attr_entity_registry_enabled_default = True
+    _attr_entity_registry_enabled_default = False
     _attr_should_poll = False
 
 

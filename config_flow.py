@@ -130,7 +130,12 @@ class SmartOffsetThermostatConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 "desc": "Выберите термостат, датчик температуры помещения и целевую температуру."
             }
         )
-
+    
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry: config_entries.ConfigEntry):
+        """Получить поток опций для конфигурационной записи."""
+        return SmartOffsetThermostatOptionsFlow(config_entry)
 
 class SmartOffsetThermostatOptionsFlow(config_entries.OptionsFlow):
     """Поток опций для тонкой настройки."""
@@ -418,10 +423,3 @@ class SmartOffsetThermostatOptionsFlow(config_entries.OptionsFlow):
                 "desc": "Тонкая настройка поведения контроллера. Изменения применяются сразу."
             }
         )
-
-
-@staticmethod
-@callback
-def async_get_options_flow(config_entry: config_entries.ConfigEntry):
-    """Получить поток опций для конфигурационной записи."""
-    return SmartOffsetThermostatOptionsFlow(config_entry)
