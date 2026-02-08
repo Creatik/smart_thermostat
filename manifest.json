@@ -1,6 +1,6 @@
 {
-  "domain": "smart_offset_thermostat",
-  "name": "Thermosmart",
+  "domain": "smart_thermostat",
+  "name": "Smart Thermosmart",
   "codeowners": ["@annexhack"],
   "config_flow": true,
   "dependencies": [],
@@ -11,5 +11,6 @@
   "version": "1.2.0",
   "integration_type": "hub",
   "after_dependencies": ["recorder"],
-  "loggers": ["custom_components.smart_offset_thermostat"]
+  "loggers": ["custom_components.smart_thermostat"],
+  "icon": "icon.png"
 }

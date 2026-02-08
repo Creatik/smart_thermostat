@@ -1,16 +1,20 @@
 """Константы для Smart Offset Thermostat."""
 
-DOMAIN = "smart_offset_thermostat"
+DOMAIN = "smart_thermostat"
 PLATFORMS = ["sensor", "button", "climate", "switch"]
 
 # Сигналы
-SIGNAL_UPDATE = "smart_offset_thermostat_update"
+SIGNAL_UPDATE = "smart_thermostat_update"
+
+# Жёсткие пределы для offset (не конфигурируются)
+MIN_OFFSET = -10.0
+MAX_OFFSET = 10.0
 
 # ========== ОСНОВНЫЕ КОНФИГУРАЦИОННЫЕ КОНСТАНТЫ ==========
 
-# Обязательные параметры
+# Обязательные параметры (в data)
 CONF_CLIMATE = "climate_entity"
-CONF_ROOM_SENSOR = "room_sensor_entity"
+CONF_ROOM_SENSORS = "room_sensor_entities"
 CONF_ROOM_TARGET = "room_target"
 
 # Основные параметры управления
@@ -31,7 +35,6 @@ CONF_NO_LEARN_SUMMER = "no_learn_summer"
 CONF_WINDOW_OPEN_NO_LEARN_MIN = "window_open_no_learn_min"
 
 # Параметры окон
-CONF_WINDOW_SENSOR = "window_sensor_entity"  # Устаревшее, для обратной совместимости
 CONF_WINDOW_SENSORS = "window_sensor_entities"
 
 # Параметры boost
@@ -49,9 +52,17 @@ CONF_OVERSHOOT_THRESHOLD = "overshoot_threshold"
 CONF_PREDICT_MINUTES = "predict_minutes"
 CONF_TTT_ALPHA = "ttt_alpha"
 CONF_TTT_SOFT_MIN = "ttt_soft_min"
+
+# Параметры stable learning и decay
+CONF_STABLE_LEARN_SECONDS = "stable_learn_seconds"
+CONF_STABLE_LEARN_ALPHA = "stable_learn_alpha"
+CONF_OFFSET_DECAY_RATE = "offset_decay_rate"
+CONF_OFFSET_DECAY_THRESHOLD = "offset_decay_threshold"
+CONF_OFFSET_LEARN_THRESHOLD = "offset_learn_threshold"
+CONF_MAX_STUCK_BIAS = "max_stuck_bias"
+
 # ========== ЗНАЧЕНИЯ ПО УМОЛЧАНИЮ ==========
 
-# Основные параметры управления
 DEFAULT_INTERVAL_SEC = 240
 DEFAULT_DEADBAND = 0.2
 DEFAULT_STEP_MAX = 1.0
@@ -60,52 +71,39 @@ DEFAULT_TRV_MIN = 12.0
 DEFAULT_TRV_MAX = 30.0
 DEFAULT_COOLDOWN_SEC = 600
 
-MIN_OFFSET = -10
-MAX_OFFSET = 10
-
-# Параметры обучения
 DEFAULT_LEARN_RATE_FAST = 0.5
 DEFAULT_LEARN_RATE_SLOW = 0.1
 DEFAULT_MIN_OFFSET_CHANGE = 0.2
 DEFAULT_ENABLE_LEARNING = True
 DEFAULT_NO_LEARN_SUMMER = False
-DEFAULT_WINDOW_OPEN_NO_LEARN_MIN = 600  # 10 минут
+DEFAULT_WINDOW_OPEN_NO_LEARN_MIN = 600
 
-# Параметры boost
 DEFAULT_BOOST_DURATION_SEC = 300
 
-# Параметры stuck detection
 DEFAULT_STUCK_ENABLE = True
 DEFAULT_STUCK_SECONDS = 1800
 DEFAULT_STUCK_MIN_DROP = 0.10
 DEFAULT_STUCK_STEP = 0.5
 
-# Параметры overshoot prevention
 DEFAULT_HEATING_ALPHA = 0.1
 DEFAULT_OVERSHOOT_THRESHOLD = 0.5
 DEFAULT_PREDICT_MINUTES = 5
+DEFAULT_TTT_ALPHA = 0.2
+DEFAULT_TTT_SOFT_MIN = 10.0
 
-# ========== ВНУТРЕННИЕ КОНСТАНТЫ ==========
-
-# Параметры stable learning
-STABLE_LEARN_SECONDS = 900  # 15 минут в deadband
-STABLE_LEARN_ALPHA = 0.25   # смещение offset на 25% к implied значению за стабильное окно
-
-# Параметры offset decay
-OFFSET_DECAY_RATE = 0.01    # 1% decay в день
-OFFSET_DECAY_THRESHOLD = 0.1  # минимальный offset для начала decay
-OFFSET_LEARN_THRESHOLD = 0.5  # порог для stable learning
-
-# Параметры stuck bias
-MAX_STUCK_BIAS = 4.0        # верхний предел для stuck_bias
+DEFAULT_STABLE_LEARN_SECONDS = 900
+DEFAULT_STABLE_LEARN_ALPHA = 0.25
+DEFAULT_OFFSET_DECAY_RATE = 0.01
+DEFAULT_OFFSET_DECAY_THRESHOLD = 0.1
+DEFAULT_OFFSET_LEARN_THRESHOLD = 0.5
+DEFAULT_MAX_STUCK_BIAS = 4.0
 
 # ========== СЛОВАРЬ ЗНАЧЕНИЙ ПО УМОЛЧАНИЮ ==========
 
 DEFAULTS = {
-    # Обязательные параметры
     CONF_ROOM_TARGET: 22.0,
-    
-    # Основные параметры управления
+    CONF_ROOM_SENSORS: [],
+
     CONF_INTERVAL_SEC: DEFAULT_INTERVAL_SEC,
     CONF_DEADBAND: DEFAULT_DEADBAND,
     CONF_STEP_MAX: DEFAULT_STEP_MAX,
@@ -113,75 +111,33 @@ DEFAULTS = {
     CONF_TRV_MIN: DEFAULT_TRV_MIN,
     CONF_TRV_MAX: DEFAULT_TRV_MAX,
     CONF_COOLDOWN_SEC: DEFAULT_COOLDOWN_SEC,
-    
-    # Параметры обучения
+
     CONF_LEARN_RATE_FAST: DEFAULT_LEARN_RATE_FAST,
     CONF_LEARN_RATE_SLOW: DEFAULT_LEARN_RATE_SLOW,
     CONF_MIN_OFFSET_CHANGE: DEFAULT_MIN_OFFSET_CHANGE,
     CONF_ENABLE_LEARNING: DEFAULT_ENABLE_LEARNING,
     CONF_NO_LEARN_SUMMER: DEFAULT_NO_LEARN_SUMMER,
     CONF_WINDOW_OPEN_NO_LEARN_MIN: DEFAULT_WINDOW_OPEN_NO_LEARN_MIN,
-    
-    # Параметры окон
+
     CONF_WINDOW_SENSORS: [],
-    
-    # Параметры boost
+
     CONF_BOOST_DURATION_SEC: DEFAULT_BOOST_DURATION_SEC,
-    
-    # Параметры stuck detection
+
     CONF_STUCK_ENABLE: DEFAULT_STUCK_ENABLE,
     CONF_STUCK_SECONDS: DEFAULT_STUCK_SECONDS,
     CONF_STUCK_MIN_DROP: DEFAULT_STUCK_MIN_DROP,
     CONF_STUCK_STEP: DEFAULT_STUCK_STEP,
-    
-    # Параметры overshoot prevention
+
     CONF_HEATING_ALPHA: DEFAULT_HEATING_ALPHA,
     CONF_OVERSHOOT_THRESHOLD: DEFAULT_OVERSHOOT_THRESHOLD,
     CONF_PREDICT_MINUTES: DEFAULT_PREDICT_MINUTES,
+    CONF_TTT_ALPHA: DEFAULT_TTT_ALPHA,
+    CONF_TTT_SOFT_MIN: DEFAULT_TTT_SOFT_MIN,
+
+    CONF_STABLE_LEARN_SECONDS: DEFAULT_STABLE_LEARN_SECONDS,
+    CONF_STABLE_LEARN_ALPHA: DEFAULT_STABLE_LEARN_ALPHA,
+    CONF_OFFSET_DECAY_RATE: DEFAULT_OFFSET_DECAY_RATE,
+    CONF_OFFSET_DECAY_THRESHOLD: DEFAULT_OFFSET_DECAY_THRESHOLD,
+    CONF_OFFSET_LEARN_THRESHOLD: DEFAULT_OFFSET_LEARN_THRESHOLD,
+    CONF_MAX_STUCK_BIAS: DEFAULT_MAX_STUCK_BIAS,
 }
-
-# ========== ПРОВЕРКА КОНСИСТЕНТНОСТИ ==========
-
-# Проверяем, что все конфигурационные константы имеют значения по умолчанию
-_CONFIG_CONSTANTS = [
-    CONF_CLIMATE,
-    CONF_ROOM_SENSOR,
-    CONF_ROOM_TARGET,
-    CONF_INTERVAL_SEC,
-    CONF_DEADBAND,
-    CONF_STEP_MAX,
-    CONF_STEP_MIN,
-    CONF_TRV_MIN,
-    CONF_TRV_MAX,
-    CONF_COOLDOWN_SEC,
-    CONF_LEARN_RATE_FAST,
-    CONF_LEARN_RATE_SLOW,
-    CONF_MIN_OFFSET_CHANGE,
-    CONF_ENABLE_LEARNING,
-    CONF_NO_LEARN_SUMMER,
-    CONF_WINDOW_OPEN_NO_LEARN_MIN,
-    CONF_WINDOW_SENSORS,
-    CONF_BOOST_DURATION_SEC,
-    CONF_STUCK_ENABLE,
-    CONF_STUCK_SECONDS,
-    CONF_STUCK_MIN_DROP,
-    CONF_STUCK_STEP,
-    CONF_HEATING_ALPHA,
-    CONF_OVERSHOOT_THRESHOLD,
-    CONF_PREDICT_MINUTES,
-]
-
-# Устаревшие константы (для обратной совместимости)
-_DEPRECATED_CONSTANTS = [
-    CONF_WINDOW_SENSOR,  # Используйте CONF_WINDOW_SENSORS
-]
-
-# Внутренние константы (не конфигурируются пользователем)
-_INTERNAL_CONSTANTS = [
-    "STABLE_LEARN_SECONDS",
-    "STABLE_LEARN_ALPHA",
-    "OFFSET_DECAY_RATE",
-    "OFFSET_DECAY_THRESHOLD",
-    "OFFSET_LEARN_THRESHOLD",
-    "MAX_STUCK_BIAS",
-]

@@ -1,9 +1,9 @@
 {
-  "title": "Smart Offset Thermostat",
+  "title": "Smart Thermostat",
   "config": {
     "step": {
       "user": {
-        "title": "Smart Offset Thermostat",
+        "title": "Smart Thermostat",
         "description": "Select thermostat, room sensor and the desired room temperature.",
         "data": {
           "climate_entity": "Thermostat",

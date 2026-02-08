@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, Optional
 
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant, callback, Event
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity import DeviceInfo
@@ -13,9 +13,36 @@ from homeassistant.components.climate.const import (
     ClimateEntityFeature,
     HVACAction,
 )
-from homeassistant.const import ATTR_TEMPERATURE, UnitOfTemperature
+from homeassistant.const import ATTR_TEMPERATURE, UnitOfTemperature, EVENT_STATE_CHANGED
 
-from .const import DOMAIN, SIGNAL_UPDATE, CONF_ROOM_TARGET, DEFAULTS
+from .const import DOMAIN, SIGNAL_UPDATE, CONF_ROOM_TARGET, CONF_ROOM_SENSORS, DEFAULTS
+
+
+def _to_float(value: Any) -> Optional[float]:
+    """Безопасное преобразование в float."""
+    try:
+        return float(value)
+    except (ValueError, TypeError):
+        return None
+
+
+def _normalize_entity_list(value: Any) -> list[str]:
+    """Нормализация списка entity_id."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, (list, tuple)):
+        out = []
+        for v in value:
+            if v is None:
+                continue
+            if isinstance(v, str):
+                out.append(v)
+            elif isinstance(v, dict) and "entity_id" in v:
+                out.append(v["entity_id"])
+        return [x for x in out if x]
+    return []
 
 
 async def async_setup_entry(
@@ -36,7 +63,7 @@ class SmartOffsetVirtualThermostat(ClimateEntity):
     
     _attr_has_entity_name = True
     _attr_supported_features = ClimateEntityFeature.TARGET_TEMPERATURE
-    _attr_hvac_modes = [HVACMode.HEAT]
+    _attr_hvac_modes = [HVACMode.HEAT, HVACMode.OFF]
     _attr_hvac_mode = HVACMode.HEAT
     _attr_temperature_unit = UnitOfTemperature.CELSIUS
     _attr_icon = "mdi:thermostat"
@@ -47,13 +74,13 @@ class SmartOffsetVirtualThermostat(ClimateEntity):
         self.hass = hass
         self.entry = entry
         self.controller = controller
-        self._unsub: Optional[Callable[[], None]] = None
-        self._room_sensor_unsub: Optional[Callable[[], None]] = None
+        self._unsub_dispatcher: Optional[Callable[[], None]] = None
+        self._unsub_room_sensors: Optional[Callable[[], None]] = None
         
         self._attr_unique_id = f"{entry.entry_id}_virtual_thermostat"
         self._attr_name = "Smart Thermostat"
         
-        # Initialize hvac_action
+        # Инициализируем hvac_action
         self._attr_hvac_action = HVACAction.IDLE
 
     @property
@@ -66,21 +93,30 @@ class SmartOffsetVirtualThermostat(ClimateEntity):
             model="Smart Offset Thermostat",
         )
 
+    def _get_room_temperature(self) -> Optional[float]:
+        """Получить усреднённую температуру по всем датчикам помещения."""
+        room_entities = _normalize_entity_list(self.entry.data.get(CONF_ROOM_SENSORS, []))
+        if not room_entities:
+            return None
+
+        temps = []
+        for entity in room_entities:
+            state = self.hass.states.get(entity)
+            if state is None:
+                continue
+            t = _to_float(state.state)
+            if t is not None:
+                temps.append(t)
+
+        if not temps:
+            return None
+
+        return sum(temps) / len(temps)  # среднее арифметическое
+
     @property
     def current_temperature(self) -> float | None:
-        """Return current room temperature."""
-        room_sensor = self.entry.data.get("room_sensor_entity")
-        if not room_sensor:
-            return None
-        
-        room_state = self.hass.states.get(room_sensor)
-        if not room_state:
-            return None
-        
-        try:
-            return float(room_state.state)
-        except (ValueError, TypeError):
-            return None
+        """Return current room temperature (усреднённая по всем датчикам)."""
+        return self._get_room_temperature()
 
     @property
     def target_temperature(self) -> float | None:
@@ -116,33 +152,27 @@ class SmartOffsetVirtualThermostat(ClimateEntity):
         if current_temp is None or target_temp is None:
             return HVACAction.IDLE
         
-        # Определяем состояние на основе разницы температур
-        deadband = float(self.controller.opt("deadband") or 0.2)
+        deadband = float(self.controller.opt("deadband") or DEFAULTS.get("deadband", 0.2))
+        error = target_temp - current_temp
         
-        if current_temp < (target_temp - deadband):
-            # Температура ниже целевой - нагреваем
+        if error > deadband:
             return HVACAction.HEATING
-        elif current_temp > (target_temp + deadband):
-            # Температура выше целевой - бездействуем
+        elif error < -deadband:
             return HVACAction.IDLE
         else:
-            # В deadband - смотрим на последнее действие контроллера
+            # В deadband — используем последнее действие контроллера
             last_action = getattr(self.controller, "last_action", "")
-            
-            if last_action in ["heating", "set_temperature"]:
+            if "heating" in last_action or "set_temperature" in last_action:
                 return HVACAction.HEATING
-            elif last_action in ["idle", "hold", "no_need_change"]:
-                return HVACAction.IDLE
-            else:
-                # По умолчанию - бездействие
-                return HVACAction.IDLE
+            return HVACAction.IDLE
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return extra state attributes."""
+        room_entities = _normalize_entity_list(self.entry.data.get(CONF_ROOM_SENSORS, []))
         return {
-            "thermostat": self.entry.data.get("climate"),
-            "room_sensor": self.entry.data.get("room_sensor_entity"),
+            "thermostat": self.entry.data.get("climate_entity"),
+            "room_sensors": room_entities,
             "offset": self.controller.storage.get_offset(self.entry.entry_id),
             "last_action": getattr(self.controller, "last_action", ""),
             "last_error": getattr(self.controller, "last_error", None),
@@ -171,39 +201,39 @@ class SmartOffsetVirtualThermostat(ClimateEntity):
     async def async_added_to_hass(self) -> None:
         """When entity is added to hass."""
         @callback
-        def _update():
+        def _update_state():
             """Update climate entity state."""
             self.async_write_ha_state()
         
-        # Подписываемся на обновления от контроллера
-        self._unsub = async_dispatcher_connect(
+        # Подписка на обновления от контроллера
+        self._unsub_dispatcher = async_dispatcher_connect(
             self.hass, 
             f"{SIGNAL_UPDATE}_{self.entry.entry_id}", 
-            _update
+            _update_state
         )
         
-        # Также подписываемся на изменения датчика температуры
-        room_sensor = self.entry.data.get("room_sensor_entity")
-        if room_sensor:
+        # Подписка на изменения всех датчиков температуры
+        room_entities = _normalize_entity_list(self.entry.data.get(CONF_ROOM_SENSORS, []))
+        
+        if room_entities:
             @callback
-            def _room_sensor_changed(event):
-                """Handle room sensor changes."""
-                # Проверяем, что событие относится к нашему датчику
-                if event.data.get("entity_id") == room_sensor:
-                    self.async_write_ha_state()
+            def _room_sensor_changed(event: Event):
+                """Handle changes in any room sensor."""
+                changed_entity = event.data.get("entity_id")
+                if changed_entity in room_entities:
+                    _update_state()
             
-            # Правильный способ подписаться на события state_changed
-            self._room_sensor_unsub = self.hass.bus.async_listen(
-                "state_changed",
+            self._unsub_room_sensors = self.hass.bus.async_listen(
+                EVENT_STATE_CHANGED,
                 _room_sensor_changed
             )
 
     async def async_will_remove_from_hass(self) -> None:
         """When entity will be removed from hass."""
-        if self._unsub:
-            self._unsub()
-            self._unsub = None
+        if self._unsub_dispatcher:
+            self._unsub_dispatcher()
+            self._unsub_dispatcher = None
         
-        if self._room_sensor_unsub:
-            self._room_sensor_unsub()
-            self._room_sensor_unsub = None
+        if self._unsub_room_sensors:
+            self._unsub_room_sensors()
+            self._unsub_room_sensors = None

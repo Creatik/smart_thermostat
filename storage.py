@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 
 
 _STORAGE_VERSION = 1
-_STORAGE_KEY = "smart_offset_thermostat"
+_STORAGE_KEY = "smart_thermostat"
 _MAX_HISTORY_DAYS = 7  # Храним историю только 7 дней
 _MAX_HISTORY_ENTRIES = 1000  # Максимальное количество записей в истории
 _SAVE_DEBOUNCE_SECONDS = 2.0  # Задержка перед сохранением
