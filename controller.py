@@ -11,6 +11,7 @@ from homeassistant.helpers.event import (
     async_track_state_change_event,
 )
 from homeassistant.helpers.dispatcher import async_dispatcher_send
+from homeassistant.components.climate.const import HVACMode
 
 from .const import *
 
@@ -346,6 +347,29 @@ class SmartOffsetController:
         except Exception as e:
             LOGGER.error("Ошибка установки температуры на %s: %s", entity_id, str(e))
             self.last_action = "set_failed"
+            return False
+
+    
+    async def _set_trv_hvac_mode(self, entity_id: str, mode: HVACMode | str) -> bool:
+        mode_val = mode.value if isinstance(mode, HVACMode) else str(mode)
+
+        # (опционально) антидребезг/повторы
+        if getattr(self, "last_hvac_mode", None) == mode_val:
+            return False
+
+        try:
+            await self.hass.services.async_call(
+                "climate",
+                "set_hvac_mode",
+                {"entity_id": entity_id, "hvac_mode": mode_val},
+                blocking=True,   # лучше True, чтобы гарантированно применилось
+            )
+            self.last_hvac_mode = mode_val
+            self.last_action = f"set_hvac_mode:{mode_val}"
+            return True
+        except Exception as e:
+            LOGGER.error("Ошибка установки hvac_mode=%s на %s: %s", mode_val, entity_id, e)
+            self.last_action = "set_hvac_mode_failed"
             return False
 
     async def _get_sensor_data(self) -> Optional[Dict[str, Any]]:
@@ -786,6 +810,22 @@ class SmartOffsetController:
         if not data:
             self._notify()
             return
+
+        # === ДОБАВИТЬ ВОТ ЭТО: обработка hvac_mode виртуального термостата ===
+        mode_raw = self.entry.options.get("hvac_mode", HVACMode.HEAT.value)
+        mode = mode_raw.value if isinstance(mode_raw, HVACMode) else str(mode_raw).lower()
+
+        if mode == HVACMode.OFF.value:
+            self._cancel_boost()
+            await self._set_trv_hvac_mode(data["climate_entity"], HVACMode.OFF)
+            self.last_action = "hvac_off"
+            self._prev_room_temp = data["t_room"]
+            self._prev_time = now_mono
+            self._notify()
+        else:
+            # гарантируем, что TRV включен в heat (один раз, дальше _set_trv_hvac_mode сам не будет спамить)
+            await self._set_trv_hvac_mode(data["climate_entity"], HVACMode.HEAT)
+        # === КОНЕЦ ДОБАВКИ ===
 
         t_room = data["t_room"]
         t_target = data["t_target"]

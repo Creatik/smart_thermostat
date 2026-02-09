@@ -12,10 +12,12 @@ from homeassistant.components.climate.const import (
     HVACMode, 
     ClimateEntityFeature,
     HVACAction,
+    SERVICE_SET_HVAC_MODE,
 )
+
 from homeassistant.const import ATTR_TEMPERATURE, UnitOfTemperature, EVENT_STATE_CHANGED
 
-from .const import DOMAIN, SIGNAL_UPDATE, CONF_ROOM_TARGET, CONF_ROOM_SENSORS, DEFAULTS
+from .const import DOMAIN, SIGNAL_UPDATE, CONF_ROOM_TARGET, CONF_ROOM_SENSORS, DEFAULTS, CONF_CLIMATE
 
 
 def _to_float(value: Any) -> Optional[float]:
@@ -144,8 +146,49 @@ class SmartOffsetVirtualThermostat(ClimateEntity):
             return 35.0
 
     @property
+    def hvac_mode(self) -> HVACMode:
+        """Return current hvac mode."""
+        # Берем из опций, по умолчанию HEAT
+        mode_raw = self.entry.options.get("hvac_mode", HVACMode.HEAT.value)
+        if isinstance(mode_raw, HVACMode):
+            return mode_raw
+        try:
+            return HVACMode(str(mode_raw))
+        except ValueError:
+            return HVACMode.HEAT
+
+    async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
+        if hvac_mode not in self.hvac_modes:
+            return
+
+        # сохранить режим
+        new_options = dict(self.entry.options)
+        new_options["hvac_mode"] = hvac_mode.value
+        self.hass.config_entries.async_update_entry(self.entry, options=new_options)
+        self._attr_hvac_mode = hvac_mode
+        self.async_write_ha_state()
+
+        # реальный TRV
+        real_climate = self.entry.data.get(CONF_CLIMATE)
+        if not real_climate:
+            return
+
+        await self.hass.services.async_call(
+            "climate",
+            "set_hvac_mode",
+            {"entity_id": real_climate, "hvac_mode": hvac_mode.value},
+            blocking=True,
+        )
+
+        await self.controller.trigger_once(force=True)
+
+    @property
     def hvac_action(self) -> HVACAction:
         """Return current HVAC action based on temperature difference."""
+
+        if self.hvac_mode == HVACMode.OFF:
+            return HVACAction.OFF
+        
         current_temp = self.current_temperature
         target_temp = self.target_temperature
         
@@ -171,7 +214,7 @@ class SmartOffsetVirtualThermostat(ClimateEntity):
         """Return extra state attributes."""
         room_entities = _normalize_entity_list(self.entry.data.get(CONF_ROOM_SENSORS, []))
         return {
-            "thermostat": self.entry.data.get("climate_entity"),
+            "thermostat": self.entry.data.get(CONF_CLIMATE),
             "room_sensors": room_entities,
             "offset": self.controller.storage.get_offset(self.entry.entry_id),
             "last_action": getattr(self.controller, "last_action", ""),
