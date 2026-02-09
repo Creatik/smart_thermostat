@@ -73,30 +73,35 @@ class OffsetStorage:
             )
 
     def _cleanup_old_history(self):
-        """Очистка устаревшей истории."""
         cutoff_time = time.time() - (_MAX_HISTORY_DAYS * 24 * 3600)
-        
+
         for entry_id in list(self._data.keys()):
-            entry_data = self._data[entry_id]
-            
-            # Очистка offset_history
-            if "offset_history" in entry_data:
-                history = entry_data["offset_history"]
-                # Оставляем только последние _MAX_HISTORY_ENTRIES записей
+            # пропускаем отдельные ключи истории контроллера
+            if isinstance(entry_id, str) and entry_id.startswith("history_"):
+                continue
+
+            entry_data = self._data.get(entry_id)
+            if not isinstance(entry_data, dict):
+                continue
+
+            # offset_history
+            history = entry_data.get("offset_history", [])
+            if isinstance(history, list):
+                # если ты уже хранишь timestamp как epoch — можно чистить по cutoff_time
+                # history = [h for h in history if h.get("timestamp", 0) >= cutoff_time]
                 if len(history) > _MAX_HISTORY_ENTRIES:
-                    entry_data["offset_history"] = history[-_MAX_HISTORY_ENTRIES:]
-            
-            # Очистка heating_rate_history
-            if "heating_rate_history" in entry_data:
-                history = entry_data["heating_rate_history"]
-                if len(history) > 50:  # Более строгое ограничение для rate
-                    entry_data["heating_rate_history"] = history[-50:]
-            
-            # Очистка overshoot_history
-            if "overshoot_history" in entry_data:
-                history = entry_data["overshoot_history"]
-                if len(history) > 50:
-                    entry_data["overshoot_history"] = history[-50:]
+                    history = history[-_MAX_HISTORY_ENTRIES:]
+                entry_data["offset_history"] = history
+
+            # heating_rate_history
+            hr = entry_data.get("heating_rate_history", [])
+            if isinstance(hr, list) and len(hr) > 50:
+                entry_data["heating_rate_history"] = hr[-50:]
+
+            # overshoot_history
+            oh = entry_data.get("overshoot_history", [])
+            if isinstance(oh, list) and len(oh) > 50:
+                entry_data["overshoot_history"] = oh[-50:]
 
     # ========== ОСНОВНЫЕ МЕТОДЫ ДЛЯ OFFSET ==========
 
@@ -361,7 +366,7 @@ class OffsetStorage:
 
     def get_all_entries(self) -> List[str]:
         """Получить список всех entry_id."""
-        return list(self._data.keys())
+        return [k for k in self._data.keys() if not k.startswith("history_")]
 
     async def remove_entry(self, entry_id: str) -> None:
         """Удалить данные для entry."""
@@ -374,3 +379,15 @@ class OffsetStorage:
                 del self._data[history_key]
         
         await self.async_save(force=True)
+
+    def get_minutes_per_degree(self, entry_id: str) -> float:
+        try:
+            return float(self._data.get(entry_id, {}).get("minutes_per_degree", 15.0))
+        except (ValueError, TypeError):
+            return 15.0
+
+    async def set_minutes_per_degree(self, entry_id: str, mpd: float) -> None:
+        async with self._lock:
+            entry_data = self._data.setdefault(entry_id, {})
+            entry_data["minutes_per_degree"] = float(mpd)
+        await self.async_save()

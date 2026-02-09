@@ -12,5 +12,5 @@
   "integration_type": "hub",
   "after_dependencies": ["recorder"],
   "loggers": ["custom_components.smart_thermostat"],
-  "icon": "icon.png"
+  "icon": "icon.svg"
 }
