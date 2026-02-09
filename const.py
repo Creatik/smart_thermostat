@@ -60,6 +60,8 @@ CONF_OFFSET_DECAY_RATE = "offset_decay_rate"
 CONF_OFFSET_DECAY_THRESHOLD = "offset_decay_threshold"
 CONF_OFFSET_LEARN_THRESHOLD = "offset_learn_threshold"
 CONF_MAX_STUCK_BIAS = "max_stuck_bias"
+CONF_OUTDOOR_SENSOR = "outdoor_sensor_entity"
+CONF_WEATHER_ENTITY = "weather_entity"
 
 # ========== ЗНАЧЕНИЯ ПО УМОЛЧАНИЮ ==========
 
@@ -111,6 +113,8 @@ DEFAULTS = {
     CONF_TRV_MIN: DEFAULT_TRV_MIN,
     CONF_TRV_MAX: DEFAULT_TRV_MAX,
     CONF_COOLDOWN_SEC: DEFAULT_COOLDOWN_SEC,
+    CONF_OUTDOOR_SENSOR: None,
+    CONF_WEATHER_ENTITY: None,
 
     CONF_LEARN_RATE_FAST: DEFAULT_LEARN_RATE_FAST,
     CONF_LEARN_RATE_SLOW: DEFAULT_LEARN_RATE_SLOW,

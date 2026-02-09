@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+from typing import Any  # Добавлен импорт Any
+
 import voluptuous as vol
 
 from homeassistant import config_entries
@@ -49,6 +51,8 @@ from .const import (
     CONF_MAX_STUCK_BIAS,
     CONF_TTT_ALPHA,
     CONF_TTT_SOFT_MIN,
+    CONF_OUTDOOR_SENSOR,
+    CONF_WEATHER_ENTITY,
     DEFAULTS,
 )
 
@@ -74,8 +78,8 @@ def _normalize_entity_list(value: Any) -> list[str]:
     return []
 
 
-class SmartOffsetThermostatConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
-    """Конфигурационный поток."""
+class SmartThermostatConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
+    """Конфигурационный поток для Smart Thermostat."""
 
     VERSION = 1
 
@@ -101,7 +105,7 @@ class SmartOffsetThermostatConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 sensors_name = ", ".join([s.split(".")[-1] for s in room_sensors[:3]])
                 if len(room_sensors) > 3:
                     sensors_name += "…"
-                title = f"Smart Offset: {climate_name} ↔ {sensors_name}"
+                title = f"Smart Thermostat: {climate_name} ↔ {sensors_name}"
 
                 return self.async_create_entry(title=title, data=user_input)
 
@@ -128,7 +132,7 @@ class SmartOffsetThermostatConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             data_schema=schema,
             errors=errors,
             description_placeholders={
-                "title": "Smart Offset Thermostat",
+                "title": "Smart Thermostat",
                 "desc": "Выберите термостат, один или несколько датчиков температуры помещения и целевую температуру."
             },
         )
@@ -136,11 +140,11 @@ class SmartOffsetThermostatConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     @staticmethod
     @callback
     def async_get_options_flow(config_entry: config_entries.ConfigEntry):
-        return SmartOffsetThermostatOptionsFlow(config_entry)
+        return SmartThermostatOptionsFlow(config_entry)
 
 
-class SmartOffsetThermostatOptionsFlow(config_entries.OptionsFlow):
-    """Поток опций."""
+class SmartThermostatOptionsFlow(config_entries.OptionsFlow):
+    """Поток опций для тонкой настройки."""
 
     def __init__(self, config_entry: config_entries.ConfigEntry):
         self._config_entry = config_entry
@@ -277,6 +281,20 @@ class SmartOffsetThermostatOptionsFlow(config_entries.OptionsFlow):
 
             vol.Optional(CONF_TTT_SOFT_MIN, default=get_option(CONF_TTT_SOFT_MIN)): NumberSelector(
                 NumberSelectorConfig(min=2, max=30, step=1, mode=NumberSelectorMode.BOX, unit_of_measurement="min")
+            ),
+
+            vol.Optional(
+                CONF_OUTDOOR_SENSOR,
+                default=get_option(CONF_OUTDOOR_SENSOR)
+            ): EntitySelector(
+                EntitySelectorConfig(domain="sensor", device_class="temperature")
+            ),
+
+            vol.Optional(
+                CONF_WEATHER_ENTITY,
+                default=get_option(CONF_WEATHER_ENTITY)
+            ): EntitySelector(
+                EntitySelectorConfig(domain="weather")
             ),
         })
 

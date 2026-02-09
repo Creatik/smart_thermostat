@@ -745,6 +745,21 @@ class SmartOffsetController:
         # correction (P-like)
         correction = _clamp(0.5 * e, -step_max, step_max)
 
+        outdoor_temp = self._get_outdoor_temperature()
+        if outdoor_temp is not None and outdoor_temp < 10:  # активируем компенсацию до +10°C
+            # Линейная компенсация: от 0 при +10°C до +2.0 при -20°C и ниже
+            added_compensation = max(0.0, (10 - outdoor_temp) * 0.15)  # 0.15 — коэффициент (можно вынести в опцию)
+            correction += added_compensation
+            if added_compensation > 0:
+                LOGGER.debug(
+                    "Outdoor compensation applied: outdoor=%.1f°C, added=%.2f°C (total correction=%.2f°C)",
+                    outdoor_temp, added_compensation, correction
+                )
+        else:
+            LOGGER.debug("Outdoor compensation skipped: no valid outdoor temperature")
+
+        added_compensation = min(added_compensation, 2.0)  # максимум +2°C
+
         # soft landing for small TTT
         if e > 0:
             predicted_minutes_ttt = e * self._minutes_per_degree
@@ -781,6 +796,9 @@ class SmartOffsetController:
         if e < -deadband and self._stuck_bias > 0:
             t_trv = _round_step(_clamp(t_trv - self._stuck_bias, trv_min, trv_max), step_min)
 
+        if e > 0:
+            predicted_minutes_ttt = e * self._minutes_per_degree
+
         t_trv = _clamp(t_trv, trv_min, trv_max)
         self.last_target_trv = t_trv
 
@@ -802,6 +820,32 @@ class SmartOffsetController:
             await self._update_heating_rate(t_room, inp.now_mono, heating_alpha)
 
         await self._handle_offset_decay(inp.now_mono, enable_learning)
+
+    def _get_outdoor_temperature(self) -> Optional[float]:
+        """Получить текущую наружную температуру из outdoor_sensor или weather_entity."""
+        # Приоритет: outdoor_sensor
+        outdoor_entity = self.opt(CONF_OUTDOOR_SENSOR)
+        if outdoor_entity:
+            state = self.hass.states.get(outdoor_entity)
+            if state and state.state not in ("unavailable", "unknown"):
+                try:
+                    return float(state.state)
+                except (ValueError, TypeError):
+                    pass
+
+        # Fallback: weather_entity
+        weather_entity = self.opt(CONF_WEATHER_ENTITY)
+        if weather_entity:
+            state = self.hass.states.get(weather_entity)
+            if state and state.attributes:
+                temp = state.attributes.get("temperature")
+                if temp is not None:
+                    try:
+                        return float(temp)
+                    except (ValueError, TypeError):
+                        pass
+
+        return None
 
     # -------------------------
     # main tick

@@ -3,38 +3,62 @@
   "config": {
     "step": {
       "user": {
-        "title": "Smart Thermostat",
-        "description": "Select thermostat, room sensor and the desired room temperature.",
+        "title": "Умный термостат с компенсацией смещения",
+        "description": "Выберите термостат, один или несколько датчиков температуры помещения и целевую температуру.",
         "data": {
-          "climate_entity": "Thermostat",
-          "room_sensor_entity": "Room temperature sensor",
-          "room_target": "Room target temperature",
-          "window_sensor_entities": "Window sensors (optional, multiple)"
+          "climate_entity": "Термостат",
+          "room_sensor_entities": "Датчики температуры помещения",
+          "room_target": "Целевая температура в помещении",
+          "window_sensor_entities": "Датчики окна (binary_sensor, опционально)"
         }
       }
+    },
+    "abort": {
+      "already_configured": "Этот термостат уже настроен в другой записи."
+    },
+    "error": {
+      "already_configured": "Этот термостат уже настроен в другой записи.",
+      "no_room_sensor": "Выберите хотя бы один датчик температуры помещения"
     }
   },
   "options": {
     "step": {
       "init": {
-        "title": "Control options",
-        "description": "Fine-tune how the controller behaves.",
+        "title": "Параметры управления",
+        "description": "Тонкая настройка поведения контроллера. Изменения применяются сразу.",
         "data": {
-          "interval_sec": "Control interval (seconds)",
-          "deadband": "Deadband (°C)",
-          "step_max": "Max change per step (°C)",
-          "step_min": "Rounding step (°C)",
-          "learn_rate": "Learning rate",
-          "trv_min": "Min thermostat setpoint (°C)",
-          "trv_max": "Max thermostat setpoint (°C)",
-          "cooldown_sec": "Cooldown between changes (seconds)",
-          "enable_learning": "Enable learning",
-          "boost_duration_sec": "Boost duration (seconds)",
-          "stuck_enable": "Adaptive over-temp correction (reduce setpoint if room stays too warm)",
-          "stuck_seconds": "Over-temp evaluation window (seconds)",
-          "stuck_min_drop": "Required cooling within window (°C)",
-          "stuck_step": "Extra reduction step when too warm (°C)",
-          "window_sensor_entities": "Window sensors (optional, multiple)"
+          "window_sensor_entities": "Датчики окна (binary_sensor)",
+          "interval_sec": "Интервал управления (секунды)",
+          "deadband": "Мёртвая зона (°C)",
+          "step_max": "Максимальное изменение за шаг (°C)",
+          "step_min": "Минимальный шаг изменения (°C)",
+          "learn_rate_fast": "Скорость быстрого обучения",
+          "learn_rate_slow": "Скорость медленного обучения",
+          "min_offset_change": "Минимальное изменение смещения (°C)",
+          "enable_learning": "Включить обучение",
+          "no_learn_summer": "Не обучаться летом (июнь-август)",
+          "window_open_no_learn_min": "Не обучаться при открытом окне дольше (минуты)",
+          "trv_min": "Минимальная уставка термостата (°C)",
+          "trv_max": "Максимальная уставка термостата (°C)",
+          "cooldown_sec": "Пауза между изменениями уставки (секунды)",
+          "boost_duration_sec": "Длительность режима Boost (секунды)",
+          "stuck_enable": "Включить детектор залипания/перегрева",
+          "stuck_seconds": "Период наблюдения за перегревом (секунды)",
+          "stuck_min_drop": "Минимальное требуемое падение температуры (°C)",
+          "stuck_step": "Шаг дополнительного снижения при перегреве (°C)",
+          "heating_alpha": "Скорость адаптации скорости нагрева",
+          "overshoot_threshold": "Порог обнаружения перегрева (°C)",
+          "predict_minutes": "Горизонт предсказания времени нагрева (минуты)",
+          "stable_learn_seconds": "Период стабильности для обучения (секунды)",
+          "stable_learn_alpha": "Сила стабильного обучения",
+          "offset_decay_rate": "Скорость затухания смещения (% в день)",
+          "offset_decay_threshold": "Минимальное смещение для затухания (°C)",
+          "offset_learn_threshold": "Порог для стабильного обучения (°C)",
+          "max_stuck_bias": "Максимальное накопленное снижение при залипании (°C)",
+          "ttt_alpha": "Скорость обучения времени до цели (TTT)",
+          "ttt_soft_min": "Минимальное время для мягкой посадки (минуты)",
+          "outdoor_sensor_entity": "Датчик наружной температуры",
+          "weather_entity": "Погодная сущность"
         }
       }
     }
@@ -42,56 +66,109 @@
   "entity": {
     "sensor": {
       "error": {
-        "name": "Control error"
+        "name": "Ошибка (цель − помещение)"
       },
       "offset": {
-        "name": "Learned offset"
+        "name": "Текущее смещение"
       },
       "target_trv": {
-        "name": "Calculated thermostat setpoint"
+        "name": "Рассчитанная уставка термостата"
       },
       "last_set": {
-        "name": "Last set thermostat setpoint"
+        "name": "Последняя отправленная уставка"
       },
       "last_action": {
-        "name": "Last decision (code)"
+        "name": "Код последнего действия"
       },
       "last_action_text": {
-        "name": "Last decision",
+        "name": "Последнее действие",
         "state": {
-          "init": "Initialization",
-          "deadband": "In deadband (no change)",
-          "deadband_rebase": "Setpoint changed (baseline set)",
-          "cooldown": "Cooldown active (no change)",
-          "set_temperature": "Setpoint sent to thermostat",
-          "skipped_no_change": "No change needed",
-          "skipped_unavailable_entities": "Entities unavailable",
-          "skipped_invalid_room_temp": "Room temperature invalid",
-          "boost": "Boost active (max heating power)",
-          "window_open": "Window open (reduced)",
-          "stuck_overtemp_down": "Over-temperature: additionally reduced",
-          "reset_offset": "Offset reset"
+          "init": "Инициализация",
+          "hold": "В мёртвой зоне — удержание",
+          "deadband_rebase": "Перебазировка в мёртвой зоне",
+          "deadband_init": "Инициализация в мёртвой зоне",
+          "cooldown": "Ожидание cooldown",
+          "set_temperature": "Уставка изменена",
+          "skipped_no_change": "Изменение не требуется",
+          "skipped_no_room_sensors": "Нет датчиков температуры",
+          "skipped_no_valid_room_temp": "Нет валидных показаний температуры",
+          "skipped_unavailable_climate": "Термостат недоступен",
+          "boost": "Режим Boost",
+          "window_open": "Окно открыто",
+          "stuck_overtemp_down": "Детектор залипания: снижено",
+          "stable_learn": "Стабильное обучение",
+          "reset_offset": "Смещение сброшено"
         }
       },
       "change_count": {
-        "name": "Number of setpoint changes"
+        "name": "Количество изменений уставки"
       },
       "window_state": {
-        "name": "Window state"
+        "name": "Состояние окна",
+        "state": {
+          "open": "Открыто",
+          "closed": "Закрыто"
+        }
       },
       "boost_remaining": {
-        "name": "Boost remaining time"
+        "name": "Осталось времени Boost"
       },
       "boost_active": {
-        "name": "Boost active"
+        "name": "Boost активен",
+        "state": {
+          "on": "Да",
+          "off": "Нет"
+        }
       },
-      "control_paused": {
-        "name": "Control paused"
+      "heating_rate": {
+        "name": "Текущая скорость нагрева (°C/мин)"
+      },
+      "predicted_time": {
+        "name": "Предсказанное время до цели (мин)"
       }
     },
     "button": {
+      "start_boost": {
+        "name": "Запустить Boost"
+      },
       "reset_offset": {
-        "name": "Reset offset"
+        "name": "Сбросить смещение"
+      }
+    },
+    "number": {
+      "room_target": {
+        "name": "Целевая температура помещения"
+      }
+    },
+    "climate": {
+      "virtual_thermostat": {
+        "name": "Умный термостат"
+      }
+    }
+  },
+  "services": {
+    "reset_offset": {
+      "name": "Сбросить смещение",
+      "description": "Сбросить накопленное смещение к нулю",
+      "fields": {
+        "entry_id": {
+          "name": "ID записи",
+          "description": "ID конфигурационной записи интеграции"
+        }
+      }
+    },
+    "start_boost": {
+      "name": "Запустить Boost",
+      "description": "Включить режим максимального нагрева на заданное время",
+      "fields": {
+        "entry_id": {
+          "name": "ID записи",
+          "description": "ID конфигурационной записи интеграции"
+        },
+        "duration": {
+          "name": "Длительность (сек)",
+          "description": "Длительность Boost (опционально, иначе по настройке)"
+        }
       }
     }
   }

@@ -4,7 +4,7 @@
   "codeowners": ["@annexhack"],
   "config_flow": true,
   "dependencies": [],
-  "documentation": "",
+  "documentation": "https://github.com/Creatik/smart_thermostat/",
   "iot_class": "local_polling",
   "issue_tracker": "",
   "requirements": [],
