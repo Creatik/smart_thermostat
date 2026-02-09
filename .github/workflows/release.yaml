@@ -1,0 +1,34 @@
+name: Build ZIP & Create Draft Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-draft:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build ZIP
+        run: |
+          cd "${GITHUB_WORKSPACE}/custom_components/smart_thermostat"
+          zip -r "${GITHUB_WORKSPACE}/smart_thermostat.zip" . \
+            -x "**/__pycache__/*" \
+            -x "**/*.pyc"
+
+      - name: Create/Update Draft Release + upload asset
+        uses: ncipollo/release-action@v1
+        with:
+          tag: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          draft: true
+          generateReleaseNotes: false
+          artifacts: "smart_thermostat.zip"
+          artifactContentType: application/zip
+          allowUpdates: true
+          token: ${{ secrets.GITHUB_TOKEN }}
