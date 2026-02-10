@@ -744,11 +744,13 @@ class SmartOffsetController:
 
         # correction (P-like)
         correction = _clamp(0.5 * e, -step_max, step_max)
-
+        added_compensation = 0.0
         outdoor_temp = self._get_outdoor_temperature()
         if outdoor_temp is not None and outdoor_temp < 10:  # активируем компенсацию до +10°C
             # Линейная компенсация: от 0 при +10°C до +2.0 при -20°C и ниже
             added_compensation = max(0.0, (10 - outdoor_temp) * 0.15)  # 0.15 — коэффициент (можно вынести в опцию)
+            added_compensation = min(added_compensation, 2.0)  # максимум +2°C для безопасности
+
             correction += added_compensation
             if added_compensation > 0:
                 LOGGER.debug(
@@ -756,9 +758,7 @@ class SmartOffsetController:
                     outdoor_temp, added_compensation, correction
                 )
         else:
-            LOGGER.debug("Outdoor compensation skipped: no valid outdoor temperature")
-
-        added_compensation = min(added_compensation, 2.0)  # максимум +2°C
+            LOGGER.debug("Outdoor compensation skipped: no valid outdoor temperature or outdoor_temp >= 10°C")
 
         # soft landing for small TTT
         if e > 0:
