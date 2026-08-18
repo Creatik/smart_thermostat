@@ -195,6 +195,14 @@ class SmartThermostatOptionsFlow(config_entries.OptionsFlow):
         def get_option(key, default=None):
             return opts.get(key, DEFAULTS.get(key, default))
 
+        def get_entity_option(key):
+            """Default для одиночного EntitySelector: пусто → vol.UNDEFINED,
+            иначе HA падает с 'Entity None is neither a valid entity ID'."""
+            val = opts.get(key, DEFAULTS.get(key))
+            if val is None or val == "":
+                return vol.UNDEFINED
+            return val
+
         schema = vol.Schema({
             vol.Optional(
                 CONF_WINDOW_SENSORS,
@@ -330,7 +338,7 @@ class SmartThermostatOptionsFlow(config_entries.OptionsFlow):
             # ====================== УМНЫЕ ОПЦИИ ======================
             vol.Optional(
                 CONF_WEATHER_ENTITY,
-                default=get_option(CONF_WEATHER_ENTITY)
+                default=get_entity_option(CONF_WEATHER_ENTITY)
             ): EntitySelector(EntitySelectorConfig(domain="weather", multiple=False)),
 
             vol.Optional(
@@ -345,7 +353,7 @@ class SmartThermostatOptionsFlow(config_entries.OptionsFlow):
 
             vol.Optional(
                 CONF_OUTDOOR_SENSOR,
-                default=get_option(CONF_OUTDOOR_SENSOR)
+                default=get_entity_option(CONF_OUTDOOR_SENSOR)
             ): EntitySelector(
                 EntitySelectorConfig(domain="sensor", device_class="temperature", multiple=False)
             ),
@@ -434,7 +442,7 @@ class SmartThermostatOptionsFlow(config_entries.OptionsFlow):
             # Влажность
             vol.Optional(
                 CONF_HUMIDITY_SENSOR,
-                default=get_option(CONF_HUMIDITY_SENSOR)
+                default=get_entity_option(CONF_HUMIDITY_SENSOR)
             ): EntitySelector(
                 EntitySelectorConfig(domain="sensor", device_class="humidity", multiple=False)
             ),
