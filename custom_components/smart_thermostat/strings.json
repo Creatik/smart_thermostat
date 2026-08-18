@@ -163,7 +163,7 @@
     "climate": {
       "virtual_thermostat": {
         "name": "Умный термостат",
-        "preset_modes": {
+        "state": {
           "none": "Ручной",
           "comfort": "Комфорт",
           "eco": "Эко",
