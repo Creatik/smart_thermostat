@@ -1,4 +1,4 @@
-name: Build ZIP & Create Draft Release
+name: Build ZIP & Create Release
 
 on:
   push:
@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 jobs:
-  build-and-draft:
+  build-and-release:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -21,14 +21,9 @@ jobs:
             -x "**/__pycache__/*" \
             -x "**/*.pyc"
 
-      - name: Create/Update Draft Release + upload asset
-        uses: ncipollo/release-action@v1
+      - name: Create Release & Upload ZIP
+        uses: softprops/action-gh-release@v2
         with:
-          tag: ${{ github.ref_name }}
-          name: ${{ github.ref_name }}
+          files: smart_thermostat.zip
+          generate_release_notes: true
           draft: true
-          generateReleaseNotes: true
-          artifacts: "smart_thermostat.zip"
-          artifactContentType: application/zip
-          allowUpdates: true
-          token: ${{ secrets.GITHUB_TOKEN }}
