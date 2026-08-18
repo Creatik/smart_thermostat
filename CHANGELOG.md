@@ -5,7 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.2.1] - 2026-08-18
+
+### Fixed
+- Ошибка «Entity None is neither a valid entity ID nor a valid UUID» при открытии настроек
+  (сущности погоды/наружного датчика/влажности).
+- Добавлены недостающие переводы опций в `ru.json` (`outdoor_sensor_entity` и др.).
+- Переводы пресетов перенесены в ключ `state` (валидация hassfest).
+
+## [2.2] - 2026-08-18
 
 ### Added
 - Split controller into modular architecture: `helpers.py`, `inputs.py`, `pid.py`, `feedforward.py`.

@@ -11,5 +11,5 @@
   "issue_tracker": "https://github.com/Creatik/smart_thermostat/issues",
   "loggers": ["custom_components.smart_thermostat"],
   "requirements": [],
-  "version": "2.2"
+  "version": "2.2.1"
 }
