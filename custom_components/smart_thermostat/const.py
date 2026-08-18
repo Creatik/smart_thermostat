@@ -37,6 +37,16 @@ CONF_STEP_MIN = "step_min"
 CONF_TRV_MIN = "trv_min"
 CONF_TRV_MAX = "trv_max"
 CONF_COOLDOWN_SEC = "cooldown_sec"
+CONF_MIN_ON_SEC = "min_on_sec"      # мин. время «включено» перед снижением уставки (анти-дребезг)
+CONF_MIN_OFF_SEC = "min_off_sec"    # мин. время «выключено» перед повышением уставки (анти-дребезг)
+CONF_VALVE_EXERCISE_DAYS = "valve_exercise_days"  # период автопрокрутки клапана (0 = выкл)
+CONF_VALVE_EXERCISE_SEC = "valve_exercise_sec"    # длительность автопрокрутки, сек
+
+# Пресеты (настроенные целевые температуры)
+CONF_PRESET_COMFORT_TEMP = "preset_comfort_temp"
+CONF_PRESET_ECO_TEMP = "preset_eco_temp"
+CONF_PRESET_AWAY_TEMP = "preset_away_temp"
+CONF_PRESET_SLEEP_TEMP = "preset_sleep_temp"
 
 # Параметры окон и boost
 CONF_WINDOW_SENSORS = "window_sensor_entities"
@@ -84,6 +94,23 @@ CONF_PID_KD = "pid_kd"
 # Режим HVAC (если используется в опциях)
 CONF_HVAC_MODE = "hvac_mode"
 
+# ========== ПРЕСЕТЫ ==========
+# Ключи активного пресета (внутренние значения для preset_mode)
+PRESET_NONE = "none"
+PRESET_COMFORT = "comfort"
+PRESET_ECO = "eco"
+PRESET_AWAY = "away"
+PRESET_SLEEP = "sleep"
+PRESET_MODES = [PRESET_NONE, PRESET_COMFORT, PRESET_ECO, PRESET_AWAY, PRESET_SLEEP]
+
+# Маппинг активного пресета -> ключ опции температуры
+PRESET_TEMP_OPTION = {
+    PRESET_COMFORT: CONF_PRESET_COMFORT_TEMP,
+    PRESET_ECO: CONF_PRESET_ECO_TEMP,
+    PRESET_AWAY: CONF_PRESET_AWAY_TEMP,
+    PRESET_SLEEP: CONF_PRESET_SLEEP_TEMP,
+}
+
 # ========== DEFAULT_* КОНСТАНТЫ (фолбэки) ==========
 DEFAULT_INTERVAL_SEC = 240
 DEFAULT_DEADBAND = 0.5
@@ -92,6 +119,10 @@ DEFAULT_STEP_MIN = 0.5
 DEFAULT_TRV_MIN = 8.0
 DEFAULT_TRV_MAX = 30.0
 DEFAULT_COOLDOWN_SEC = 600
+DEFAULT_MIN_ON_SEC = 120
+DEFAULT_MIN_OFF_SEC = 120
+DEFAULT_VALVE_EXERCISE_DAYS = 7
+DEFAULT_VALVE_EXERCISE_SEC = 120
 DEFAULT_BOOST_DURATION_SEC = 300
 DEFAULT_LEARN_RATE_FAST = 0.5
 DEFAULT_LEARN_RATE_SLOW = 0.07
@@ -110,6 +141,10 @@ DEFAULT_WEATHER_MAX_COMP = 5.0
 DEFAULT_PID_KP = 0.6
 DEFAULT_PID_KI = 0.05
 DEFAULT_PID_KD = 0.1
+DEFAULT_PRESET_COMFORT_TEMP = 22.0
+DEFAULT_PRESET_ECO_TEMP = 19.0
+DEFAULT_PRESET_AWAY_TEMP = 16.0
+DEFAULT_PRESET_SLEEP_TEMP = 18.0
 
 # ========== ЗНАЧЕНИЯ ПО УМОЛЧАНИЮ ==========
 
@@ -130,6 +165,10 @@ DEFAULTS = {
     # Управление
     CONF_INTERVAL_SEC: DEFAULT_INTERVAL_SEC,
     CONF_DEADBAND: DEFAULT_DEADBAND,
+    CONF_MIN_ON_SEC: DEFAULT_MIN_ON_SEC,
+    CONF_MIN_OFF_SEC: DEFAULT_MIN_OFF_SEC,
+    CONF_VALVE_EXERCISE_DAYS: DEFAULT_VALVE_EXERCISE_DAYS,
+    CONF_VALVE_EXERCISE_SEC: DEFAULT_VALVE_EXERCISE_SEC,
     CONF_STEP_MAX: DEFAULT_STEP_MAX,
     CONF_STEP_MIN: DEFAULT_STEP_MIN,
     CONF_TRV_MIN: DEFAULT_TRV_MIN,
@@ -173,6 +212,12 @@ DEFAULTS = {
     # Умные фичи
     CONF_ECO_OFFSET: -3.0,
     CONF_PREDICTIVE_FACTOR: DEFAULT_PREDICTIVE_FACTOR,
+
+    # Пресеты
+    CONF_PRESET_COMFORT_TEMP: DEFAULT_PRESET_COMFORT_TEMP,
+    CONF_PRESET_ECO_TEMP: DEFAULT_PRESET_ECO_TEMP,
+    CONF_PRESET_AWAY_TEMP: DEFAULT_PRESET_AWAY_TEMP,
+    CONF_PRESET_SLEEP_TEMP: DEFAULT_PRESET_SLEEP_TEMP,
 
     # PID
     CONF_PID_KP: DEFAULT_PID_KP,

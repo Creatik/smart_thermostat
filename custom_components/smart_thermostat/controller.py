@@ -51,6 +51,9 @@ class SmartOffsetController:
         self.last_error: Optional[float] = None
         self.last_target_trv: Optional[float] = None
         self.change_count = 0
+        # анти-дребезг: направление последнего изменения уставки
+        self._last_set_direction = 0
+        self._last_set_direction_time = 0.0
 
         # hvac mode anti-spam
         self.last_hvac_mode: Optional[str] = None
@@ -60,6 +63,11 @@ class SmartOffsetController:
         self._boost_unsub = None
         self.boost_active = False
         self.boost_until = 0.0
+
+        # valve exercise (автопрокрутка клапана)
+        self._valve_exercise_active = False
+        self._valve_exercise_until = 0.0
+        self._valve_exercise_unsub = None
 
         # window
         self.window_is_open = False
@@ -203,6 +211,7 @@ class SmartOffsetController:
 
     async def async_stop(self):
         self._cancel_boost()
+        self._cancel_valve_exercise()
         if self.unsub:
             self.unsub()
             self.unsub = None
@@ -260,6 +269,48 @@ class SmartOffsetController:
         await self.trigger_once(force=True)
         self._notify()
 
+    # =========================
+    # ПРЕСЕТЫ (Comfort/Eco/Away/Sleep)
+    # =========================
+    def active_preset(self) -> Optional[str]:
+        """Активный пресет (None, если ручной режим 'none')."""
+        preset = self.storage.get_preset(self.entry.entry_id)
+        if preset and preset in PRESET_MODES and preset != PRESET_NONE:
+            return preset
+        return None
+
+    def active_target(self) -> float:
+        """Базовая цель: температура активного пресета или ручная уставка."""
+        preset = self.active_preset()
+        if preset:
+            option_key = PRESET_TEMP_OPTION.get(preset)
+            if option_key:
+                try:
+                    return float(self.opt(option_key))
+                except (ValueError, TypeError):
+                    pass
+        return float(self.opt(CONF_ROOM_TARGET))
+
+    def preset_target(self, preset: str) -> Optional[float]:
+        """Температура указанного пресета (или None)."""
+        option_key = PRESET_TEMP_OPTION.get(preset)
+        if not option_key:
+            return None
+        try:
+            return float(self.opt(option_key))
+        except (ValueError, TypeError):
+            return None
+
+    async def set_preset(self, preset: str) -> None:
+        """Переключить активный пресет (persisted в storage)."""
+        if preset not in PRESET_MODES:
+            LOGGER.warning("Некорректный пресет %r для %s", preset, self.entry.entry_id)
+            return
+        await self.storage.set_preset(self.entry.entry_id, preset)
+        self._reset_stability_tracking()
+        await self.trigger_once(force=True)
+        self._notify()
+
     # -------------------------
     # listeners / helpers
     # -------------------------
@@ -272,6 +323,45 @@ class SmartOffsetController:
             self._boost_unsub = None
         self.boost_active = False
         self.boost_until = 0.0
+
+    def _cancel_valve_exercise(self):
+        if self._valve_exercise_unsub:
+            try:
+                self._valve_exercise_unsub()
+            except Exception:
+                pass
+            self._valve_exercise_unsub = None
+        self._valve_exercise_active = False
+        self._valve_exercise_until = 0.0
+
+    async def _start_valve_exercise(self, inp: Inputs):
+        """Открыть клапан на максимум на короткое время, чтобы он не залипал."""
+        exercise_sec = int(
+            self.opt(CONF_VALVE_EXERCISE_SEC) or DEFAULT_VALVE_EXERCISE_SEC
+        )
+        exercise_sec = max(10, min(exercise_sec, 600))
+        trv_max = float(self.opt(CONF_TRV_MAX) or DEFAULT_TRV_MAX)
+        trv_min = float(self.opt(CONF_TRV_MIN) or DEFAULT_TRV_MIN)
+        step_min = float(self.opt(CONF_STEP_MIN) or DEFAULT_STEP_MIN)
+        t_trv = _round_step(_clamp(trv_max, trv_min, trv_max), step_min)
+
+        self._valve_exercise_active = True
+        self._valve_exercise_until = self.hass.loop.time() + float(exercise_sec)
+        self.last_action = "valve_exercise"
+        self.last_target_trv = t_trv
+        await self._set_trv_temperature(inp.climate_entity, t_trv)
+
+        async def _end(_):
+            self._cancel_valve_exercise()
+            await self.storage.set_valve_exercise(
+                self.entry.entry_id, self.hass.loop.time()
+            )
+            await self.trigger_once(force=True)
+            self._notify()
+
+        self._valve_exercise_unsub = async_call_later(
+            self.hass, float(exercise_sec), _end
+        )
 
     def _reset_stability_tracking(self):
         self._stable_since = None
@@ -350,8 +440,14 @@ class SmartOffsetController:
                 {"entity_id": entity_id, ATTR_TEMPERATURE: temp},
                 blocking=False,
             )
+            old_set = self.last_set
             self.last_set = temp
             self.last_change = now
+            if old_set is not None:
+                self._last_set_direction = (
+                    1 if temp > old_set else (-1 if temp < old_set else 0)
+                )
+                self._last_set_direction_time = now
             self.change_count += 1
             self._force_next_control = False
             return True
@@ -546,7 +642,7 @@ class SmartOffsetController:
             )
             return None
 
-        t_target = float(self.opt(CONF_ROOM_TARGET))
+        t_target = self.active_target()
 
         mode_raw = self.entry.options.get(CONF_HVAC_MODE, HVACMode.HEAT.value)
         hvac_mode = (
@@ -1065,6 +1161,22 @@ class SmartOffsetController:
 
         t_trv = _round_step(t_target + offset + correction, step_min)
 
+        # Прогнозная отсечка перегрева (мягкая посадка): чем ближе к цели,
+        # тем ниже опускаем уставку, чтобы клапан закрылся заранее
+        # (инерция доведёт до цели без перегрева)
+        if e > 0 and self._heating_rate > 0.001:
+            predicted_time = e / self._heating_rate  # минут до цели
+            if predicted_time < self.ttt_soft_min:
+                frac = predicted_time / max(0.1, self.ttt_soft_min)  # 0..1
+                t_trv = _round_step(
+                    _clamp(
+                        t_target + offset - (1.0 - frac) * step_max,
+                        trv_min,
+                        trv_max,
+                    ),
+                    step_min,
+                )
+
         # stuck logic
         if stuck_enable and (not self.window_is_open) and (not self.boost_active):
             t_trv, _ = await self._handle_stuck_detection(
@@ -1094,6 +1206,22 @@ class SmartOffsetController:
             ) < cooldown and not self._force_next_control:
                 self.last_action = "cooldown"
                 return
+
+        # анти-дребезг (min_on/min_off): не менять направление уставки слишком часто
+        if self.last_set is not None and not self._force_next_control:
+            desired = t_trv - self.last_set
+            if abs(desired) >= (step_min - 1e-9):
+                direction = 1 if desired > 0 else -1
+                if direction != self._last_set_direction and self._last_set_direction != 0:
+                    elapsed = inp.now_mono - self._last_set_direction_time
+                    min_sec = (
+                        float(self.opt(CONF_MIN_OFF_SEC) or DEFAULT_MIN_OFF_SEC)
+                        if direction > 0
+                        else float(self.opt(CONF_MIN_ON_SEC) or DEFAULT_MIN_ON_SEC)
+                    )
+                    if elapsed < min_sec:
+                        self.last_action = "anti_chatter"
+                        return
 
         success = await self._set_trv_temperature(inp.climate_entity, t_trv)
         if success:
@@ -1147,6 +1275,35 @@ class SmartOffsetController:
 
             e = inp.t_effective - inp.t_room
             self.last_error = round(e, 3)
+
+            # Valve exercise (обслуживание клапана)
+            exercise_days = int(self.opt(CONF_VALVE_EXERCISE_DAYS) or 0)
+            if exercise_days > 0:
+                if self._valve_exercise_active:
+                    if inp.now_mono < self._valve_exercise_until:
+                        trv_max = float(self.opt(CONF_TRV_MAX) or DEFAULT_TRV_MAX)
+                        await self._set_trv_temperature(inp.climate_entity, trv_max)
+                        self.last_action = "valve_exercise"
+                        self._prev_room_temp = inp.t_room
+                        self._prev_time = now_mono
+                        self._notify()
+                        return
+                    self._cancel_valve_exercise()
+                    await self.storage.set_valve_exercise(
+                        self.entry.entry_id, inp.now_mono
+                    )
+                elif (
+                    inp.hvac_mode != HVACMode.OFF.value
+                    and not inp.window_open
+                    and not self.boost_active
+                ):
+                    last_ex = self.storage.get_valve_exercise(self.entry.entry_id)
+                    if inp.now_mono - last_ex >= exercise_days * 86400:
+                        await self._start_valve_exercise(inp)
+                        self._prev_room_temp = inp.t_room
+                        self._prev_time = now_mono
+                        self._notify()
+                        return
 
             current_mode = inp.hvac_mode
             

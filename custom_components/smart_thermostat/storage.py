@@ -391,3 +391,28 @@ class OffsetStorage:
             entry_data = self._data.setdefault(entry_id, {})
             entry_data["minutes_per_degree"] = float(mpd)
         await self.async_save()
+
+    def get_valve_exercise(self, entry_id: str) -> float:
+        """Время последней автопрокрутки клапана (loop.time()). 0 — никогда."""
+        try:
+            return float(self._data.get(entry_id, {}).get("valve_exercise", 0.0))
+        except (ValueError, TypeError):
+            return 0.0
+
+    async def set_valve_exercise(self, entry_id: str, ts: float) -> None:
+        """Сохранить время последней автопрокрутки клапана."""
+        async with self._lock:
+            entry_data = self._data.setdefault(entry_id, {})
+            entry_data["valve_exercise"] = float(ts)
+        await self.async_save()
+
+    def get_preset(self, entry_id: str) -> str:
+        """Активный пресет (ключ preset_mode). По умолчанию — none."""
+        return str(self._data.get(entry_id, {}).get("preset", "none"))
+
+    async def set_preset(self, entry_id: str, preset: str) -> None:
+        """Сохранить активный пресет."""
+        async with self._lock:
+            entry_data = self._data.setdefault(entry_id, {})
+            entry_data["preset"] = str(preset)
+        await self.async_save()

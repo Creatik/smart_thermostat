@@ -34,7 +34,11 @@ from .const import (
     CONF_TRV_MIN,
     CONF_TRV_MAX,
     CONF_COOLDOWN_SEC,
+    CONF_MIN_ON_SEC,
+    CONF_MIN_OFF_SEC,
     CONF_BOOST_DURATION_SEC,
+    CONF_VALVE_EXERCISE_DAYS,
+    CONF_VALVE_EXERCISE_SEC,
     CONF_ENABLE_LEARNING,
     CONF_STUCK_ENABLE,
     CONF_STUCK_SECONDS,
@@ -69,6 +73,14 @@ from .const import (
     CONF_PID_KD,
     CONF_HUMIDITY_SENSOR,  # ← Добавлено
     CONF_COOLDOWN_REDUCTION_FACTOR,
+    CONF_PRESET_COMFORT_TEMP,
+    CONF_PRESET_ECO_TEMP,
+    CONF_PRESET_AWAY_TEMP,
+    CONF_PRESET_SLEEP_TEMP,
+    DEFAULT_PRESET_COMFORT_TEMP,
+    DEFAULT_PRESET_ECO_TEMP,
+    DEFAULT_PRESET_AWAY_TEMP,
+    DEFAULT_PRESET_SLEEP_TEMP,
     DEFAULTS,
 )
 
@@ -237,8 +249,24 @@ class SmartThermostatOptionsFlow(config_entries.OptionsFlow):
                 NumberSelectorConfig(min=0, max=3600, step=30, mode=NumberSelectorMode.BOX, unit_of_measurement="s")
             ),
 
+            vol.Optional(CONF_MIN_ON_SEC, default=get_option(CONF_MIN_ON_SEC)): NumberSelector(
+                NumberSelectorConfig(min=0, max=3600, step=30, mode=NumberSelectorMode.BOX, unit_of_measurement="s")
+            ),
+
+            vol.Optional(CONF_MIN_OFF_SEC, default=get_option(CONF_MIN_OFF_SEC)): NumberSelector(
+                NumberSelectorConfig(min=0, max=3600, step=30, mode=NumberSelectorMode.BOX, unit_of_measurement="s")
+            ),
+
             vol.Optional(CONF_BOOST_DURATION_SEC, default=get_option(CONF_BOOST_DURATION_SEC)): NumberSelector(
                 NumberSelectorConfig(min=30, max=7200, step=30, mode=NumberSelectorMode.BOX, unit_of_measurement="s")
+            ),
+
+            vol.Optional(CONF_VALVE_EXERCISE_DAYS, default=get_option(CONF_VALVE_EXERCISE_DAYS)): NumberSelector(
+                NumberSelectorConfig(min=0, max=60, step=1, mode=NumberSelectorMode.BOX, unit_of_measurement="дн.")
+            ),
+
+            vol.Optional(CONF_VALVE_EXERCISE_SEC, default=get_option(CONF_VALVE_EXERCISE_SEC)): NumberSelector(
+                NumberSelectorConfig(min=10, max=600, step=10, mode=NumberSelectorMode.BOX, unit_of_measurement="s")
             ),
 
             vol.Optional(CONF_STUCK_ENABLE, default=get_option(CONF_STUCK_ENABLE)): BooleanSelector(),
@@ -409,6 +437,47 @@ class SmartThermostatOptionsFlow(config_entries.OptionsFlow):
                 default=get_option(CONF_HUMIDITY_SENSOR)
             ): EntitySelector(
                 EntitySelectorConfig(domain="sensor", device_class="humidity", multiple=False)
+            ),
+
+            # ====================== ПРЕСЕТЫ ======================
+            vol.Optional(
+                CONF_PRESET_COMFORT_TEMP,
+                default=get_option(CONF_PRESET_COMFORT_TEMP, DEFAULT_PRESET_COMFORT_TEMP)
+            ): NumberSelector(
+                NumberSelectorConfig(
+                    min=5.0, max=30.0, step=0.5,
+                    mode=NumberSelectorMode.BOX, unit_of_measurement="°C"
+                )
+            ),
+
+            vol.Optional(
+                CONF_PRESET_ECO_TEMP,
+                default=get_option(CONF_PRESET_ECO_TEMP, DEFAULT_PRESET_ECO_TEMP)
+            ): NumberSelector(
+                NumberSelectorConfig(
+                    min=5.0, max=30.0, step=0.5,
+                    mode=NumberSelectorMode.BOX, unit_of_measurement="°C"
+                )
+            ),
+
+            vol.Optional(
+                CONF_PRESET_AWAY_TEMP,
+                default=get_option(CONF_PRESET_AWAY_TEMP, DEFAULT_PRESET_AWAY_TEMP)
+            ): NumberSelector(
+                NumberSelectorConfig(
+                    min=5.0, max=30.0, step=0.5,
+                    mode=NumberSelectorMode.BOX, unit_of_measurement="°C"
+                )
+            ),
+
+            vol.Optional(
+                CONF_PRESET_SLEEP_TEMP,
+                default=get_option(CONF_PRESET_SLEEP_TEMP, DEFAULT_PRESET_SLEEP_TEMP)
+            ): NumberSelector(
+                NumberSelectorConfig(
+                    min=5.0, max=30.0, step=0.5,
+                    mode=NumberSelectorMode.BOX, unit_of_measurement="°C"
+                )
             ),
             # ==============================================================
         })

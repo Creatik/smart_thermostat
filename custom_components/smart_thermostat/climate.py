@@ -16,7 +16,16 @@ from homeassistant.components.climate.const import (
 
 from homeassistant.const import ATTR_TEMPERATURE, UnitOfTemperature, EVENT_STATE_CHANGED
 
-from .const import DOMAIN, SIGNAL_UPDATE, CONF_ROOM_TARGET, CONF_ROOM_SENSORS, DEFAULTS, CONF_CLIMATE
+from .const import (
+    DOMAIN,
+    SIGNAL_UPDATE,
+    CONF_ROOM_TARGET,
+    CONF_ROOM_SENSORS,
+    DEFAULTS,
+    CONF_CLIMATE,
+    PRESET_NONE,
+    PRESET_MODES,
+)
 
 
 def _to_float(value: Any) -> Optional[float]:
@@ -63,7 +72,8 @@ class SmartThermostatVirtual(ClimateEntity):
     _attr_supported_features = (
         ClimateEntityFeature.TARGET_TEMPERATURE |
         ClimateEntityFeature.TURN_ON |
-        ClimateEntityFeature.TURN_OFF
+        ClimateEntityFeature.TURN_OFF |
+        ClimateEntityFeature.PRESET_MODE
     )
     _attr_hvac_modes = [HVACMode.HEAT, HVACMode.OFF]
     _attr_hvac_mode = HVACMode.HEAT
@@ -115,11 +125,28 @@ class SmartThermostatVirtual(ClimateEntity):
 
     @property
     def target_temperature(self) -> float | None:
-        v = self.controller.opt(CONF_ROOM_TARGET)
         try:
-            return float(v)
+            return float(self.controller.active_target())
         except (ValueError, TypeError):
             return float(DEFAULTS[CONF_ROOM_TARGET])
+
+    @property
+    def preset_modes(self) -> list[str]:
+        """Доступные пресеты (none, comfort, eco, away, sleep)."""
+        return list(PRESET_MODES)
+
+    @property
+    def preset_mode(self) -> str:
+        """Активный пресет."""
+        preset = self.controller.active_preset()
+        return preset if preset else PRESET_NONE
+
+    async def async_set_preset_mode(self, preset_mode: str) -> None:
+        """Переключить пресет."""
+        if preset_mode not in PRESET_MODES:
+            return
+        await self.controller.set_preset(preset_mode)
+        self.async_write_ha_state()
 
     @property
     def min_temp(self) -> float:
@@ -222,11 +249,15 @@ class SmartThermostatVirtual(ClimateEntity):
             return
         
         new_target = float(kwargs[ATTR_TEMPERATURE])
-        
+
+        # Ручная установка температуры сбрасывает активный пресет (переход в 'none')
+        if self.controller.active_preset():
+            await self.controller.set_preset(PRESET_NONE)
+
         new_options = dict(self.entry.options)
         new_options[CONF_ROOM_TARGET] = new_target
         self.hass.config_entries.async_update_entry(self.entry, options=new_options)
-        
+
         await self.controller.trigger_once(force=True)
         self.async_write_ha_state()
 

@@ -14,6 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - PID correction with anti-windup (`pid_kp`, `pid_ki`, `pid_kd`).
 - Custom services `reset_offset` and `start_boost`.
 - HACS repository layout (`custom_components/smart_thermostat/`), CI workflows, LICENSE, SECURITY, CHANGELOG.
+- Anti-debounce for TRV control: `min_on_sec` / `min_off_sec`.
+- Predictive soft landing (overshoot cut-off) for gradual approach to target.
+- Valve exercise (auto valve scroll): `valve_exercise_days` / `valve_exercise_sec`.
+- **Presets** Comfort / Eco / Away / Sleep: configurable target temperatures
+  (`preset_comfort_temp`, `preset_eco_temp`, `preset_away_temp`, `preset_sleep_temp`)
+  selectable via the `preset_mode` property of the virtual thermostat.
 
 ### Fixed
 - Undefined `DEFAULT_*` fallback constants causing potential `NameError`.
