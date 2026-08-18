@@ -1,0 +1,46 @@
+name: Build ZIP & Create Draft Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-draft:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build ZIP (Home Assistant custom_component)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          INTEGRATION_DIR="custom_components/smart_thermostat"
+          ZIP_NAME="smart_thermostat.zip"
+
+          test -d "$INTEGRATION_DIR"
+
+          cd "$INTEGRATION_DIR"
+          zip -r "${GITHUB_WORKSPACE}/${ZIP_NAME}" . \
+            -x "**/__pycache__/*" \
+            -x "**/*.pyc" \
+            -x "**/*.pyo" \
+            -x "**/*.log" \
+            -x "**/.DS_Store"
+
+      - name: Create/Update Draft Release + upload asset
+        uses: ncipollo/release-action@v1
+        with:
+          tag: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          draft: true
+          prerelease: false
+          generateReleaseNotes: false
+          artifacts: "smart_thermostat.zip"
+          artifactContentType: application/zip
+          allowUpdates: true
+          token: ${{ secrets.GITHUB_TOKEN }}
