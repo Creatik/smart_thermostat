@@ -16,7 +16,13 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.const import UnitOfTemperature, UnitOfTime
-from .const import DOMAIN, SIGNAL_UPDATE, CONF_ROOM_TARGET, CONF_CLIMATE
+from .const import (
+    DOMAIN,
+    SIGNAL_UPDATE,
+    CONF_ROOM_TARGET,
+    CONF_CLIMATE,
+    CONF_ROOM_SENSORS,
+)
 
 
 
@@ -230,8 +236,8 @@ class SmartOffsetDebugSensor(SensorEntity):
     def extra_state_attributes(self) -> dict[str, Any]:
         """Дополнительные атрибуты сенсора."""
         attrs = {
-            "thermostat": self.entry.data.get("climate"),
-            "room_sensor": self.entry.data.get("room_sensor"),
+            "thermostat": self.entry.data.get(CONF_CLIMATE),
+            "room_sensor": self.entry.data.get(CONF_ROOM_SENSORS),
             "room_target": self.controller.opt(CONF_ROOM_TARGET),
         }
         

@@ -1,0 +1,34 @@
+reset_offset:
+  name: Сбросить смещение
+  description: Сбросить накопленное смещение к нулю.
+  fields:
+    entry_id:
+      name: ID записи
+      description: ID конфигурационной записи интеграции smart_thermostat.
+      required: true
+      example: "01JXXXXXXX"
+      selector:
+        text:
+
+start_boost:
+  name: Запустить Boost
+  description: Включить режим максимального нагрева на заданное время.
+  fields:
+    entry_id:
+      name: ID записи
+      description: ID конфигурационной записи интеграции smart_thermostat.
+      required: true
+      example: "01JXXXXXXX"
+      selector:
+        text:
+    duration:
+      name: Длительность (сек)
+      description: Длительность Boost в секундах. Если не указана — берётся из настроек (boost_duration_sec).
+      required: false
+      default: 300
+      selector:
+        number:
+          min: 30
+          max: 3600
+          step: 30
+          unit_of_measurement: "s"

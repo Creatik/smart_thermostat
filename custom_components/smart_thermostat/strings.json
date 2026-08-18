@@ -58,7 +58,19 @@
           "ttt_alpha": "Скорость обучения времени до цели (TTT)",
           "ttt_soft_min": "Минимальное время для мягкой посадки (минуты)",
           "outdoor_sensor_entity": "Датчик наружной температуры",
-          "weather_entity": "Погодная сущность"
+          "weather_entity": "Погодная сущность",
+          "weather_forecast_type": "Тип прогноза погоды",
+          "weather_base_temp": "Уличная температура начала компенсации (°C)",
+          "weather_max_comp": "Максимальная погодная компенсация (°C)",
+          "presence_entity": "Датчики присутствия (Person / binary_sensor)",
+          "eco_enable": "Эко-режим при отсутствии людей",
+          "eco_offset": "Эко-смещение уставки (°C)",
+          "predictive_factor": "Влияние холода на компенсацию",
+          "pid_kp": "PID: пропорциональный коэффициент (Kp)",
+          "pid_ki": "PID: интегральный коэффициент (Ki)",
+          "pid_kd": "PID: дифференциальный коэффициент (Kd)",
+          "humidity_sensor": "Датчик влажности",
+          "cooldown_reduction_factor": "Коэффициент снижения cooldown"
         }
       }
     }

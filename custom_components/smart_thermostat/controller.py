@@ -2,10 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
-import re
 
-from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Optional, Tuple, Dict
 
@@ -19,95 +16,20 @@ from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.components.climate.const import HVACMode
 
 from .const import *
+from .helpers import (
+    clamp as _clamp,
+    round_step as _round_step,
+    to_float as _to_float,
+    normalize_entity_list as _normalize_entity_list,
+    is_truthy_state as _is_truthy_state,
+)
+from .inputs import Inputs
+from .pid import PIDController
+from .feedforward import Feedforward
 
 LOGGER = logging.getLogger(__name__)
 
 CONF_HVAC_MODE = "hvac_mode"
-
-
-def _clamp(v: float, lo: float, hi: float) -> float:
-    return max(lo, min(hi, v))
-
-
-def _round_step(v: float, step: float) -> float:
-    if step <= 0:
-        return v
-    return round(v / step) * step
-
-_NUM_RE = re.compile(r"[-+]?\d+(?:[.,]\d+)?")
-
-def _to_float(value: Any) -> Optional[float]:
-    """Convert HA state/attr value to float.
-
-    Returns None for unknown/unavailable/empty/unparseable values.
-    Accepts strings like: "22.5", "22,5", "22.5 °C", "temp: 22,5", etc.
-    """
-    if value is None:
-        return None
-
-    # Быстрый путь для чисел
-    if isinstance(value, (int, float)):
-        try:
-            f = float(value)
-        except (TypeError, ValueError):
-            return None
-        # Отсекаем NaN/inf
-        if f != f or f in (float("inf"), float("-inf")):
-            return None
-        return f
-
-    s = str(value).strip().lower()
-    if s in ("unavailable", "unknown", "none", "", "uninitialized", "nan", "null"):
-        return None
-
-    m = _NUM_RE.search(s)
-    if not m:
-        return None
-
-    num = m.group(0).replace(",", ".")
-    try:
-        f = float(num)
-    except (TypeError, ValueError):
-        return None
-
-    if f != f or f in (float("inf"), float("-inf")):
-        return None
-    return f
-
-
-def _normalize_entity_list(value: Any) -> list[str]:
-    if value is None:
-        return []
-    if isinstance(value, str):
-        return [value]
-    if isinstance(value, (list, tuple)):
-        out: list[str] = []
-        for v in value:
-            if v is None:
-                continue
-            if isinstance(v, str):
-                out.append(v)
-            elif isinstance(v, dict) and "entity_id" in v:
-                out.append(v["entity_id"])
-        return [x for x in out if x]
-    return []
-
-
-def _is_truthy_state(state: Any) -> bool:
-    if state is None:
-        return False
-    return str(state).lower() in ("on", "open", "true", "1")
-
-
-@dataclass
-class Inputs:
-    climate_entity: str
-    climate_state: Any
-    t_room: float
-    t_target: float
-    hvac_mode: str
-    window_open: bool
-    now_mono: float
 
 
 class SmartOffsetController:
@@ -160,6 +82,14 @@ class SmartOffsetController:
         self._overshoot_count = 0
         self._learn_rate_slow = 0.1
         self._last_offset_update = 0.0
+
+        # PID + feedforward
+        self.pid = PIDController(
+            float(self.opt(CONF_PID_KP) or DEFAULT_PID_KP),
+            float(self.opt(CONF_PID_KI) or DEFAULT_PID_KI),
+            float(self.opt(CONF_PID_KD) or DEFAULT_PID_KD),
+        )
+        self.ff = Feedforward(self.hass, self.opt)
 
         # stuck logic
         self._force_next_control = False
@@ -312,8 +242,9 @@ class SmartOffsetController:
         await self.trigger_once(force=True)
         self._notify()
 
-    async def start_boost(self):
-        duration = int(self.opt(CONF_BOOST_DURATION_SEC) or DEFAULT_BOOST_DURATION_SEC)
+    async def start_boost(self, duration: Optional[int] = None):
+        if duration is None:
+            duration = int(self.opt(CONF_BOOST_DURATION_SEC) or DEFAULT_BOOST_DURATION_SEC)
         duration = max(30, min(duration, 3600))
 
         self._cancel_boost()
@@ -350,6 +281,11 @@ class SmartOffsetController:
         self._stuck_ref_temp = None
         self._stuck_ref_time = None
         self._stuck_bias = 0.0
+        self._reset_pid()
+
+    def _reset_pid(self):
+        """Сброс состояния PID (интеграл, производная, эталон)."""
+        self.pid.reset()
 
     def _ensure_window_listener(self, window_entities: Optional[list[str]]):
         entities = tuple([e for e in _normalize_entity_list(window_entities) if e])
@@ -633,11 +569,14 @@ class SmartOffsetController:
             self.window_is_open = window_open
             self._window_open_since = now_mono if window_open else None
 
+        t_effective = self.ff.effective_target(t_target, hvac_mode)
+
         return Inputs(
             climate_entity=climate_entity,
             climate_state=climate_state,
             t_room=t_room,
             t_target=t_target,
+            t_effective=t_effective,
             hvac_mode=hvac_mode,
             window_open=window_open,
             now_mono=now_mono,
@@ -739,9 +678,9 @@ class SmartOffsetController:
         ):
             return
 
-        if self._stable_since is None or self._stable_target != inp.t_target:
+        if self._stable_since is None or self._stable_target != inp.t_effective:
             self._stable_since = inp.now_mono
-            self._stable_target = inp.t_target
+            self._stable_target = inp.t_effective
             self._stable_last_set = self.last_set
             return
 
@@ -972,7 +911,7 @@ class SmartOffsetController:
         return True
 
     async def _handle_deadband_hold(self, inp: Inputs, deadband: float) -> bool:
-        e = inp.t_target - inp.t_room
+        e = inp.t_effective - inp.t_room
         
         # КРИТИЧЕСКИ ВАЖНО: если ошибка больше мёртвой зоны — не удерживаем!
         if abs(e) > deadband:
@@ -984,14 +923,14 @@ class SmartOffsetController:
         step_min = float(self.opt(CONF_STEP_MIN) or DEFAULT_STEP_MIN)
 
         baseline = _round_step(
-            _clamp(inp.t_target + offset, trv_min, trv_max), step_min
+            _clamp(inp.t_effective + offset, trv_min, trv_max), step_min
         )
 
         target_changed = (
             self._last_room_target is not None
-            and abs(inp.t_target - self._last_room_target) > 1e-9
+            and abs(inp.t_effective - self._last_room_target) > 1e-9
         )
-        self._last_room_target = inp.t_target
+        self._last_room_target = inp.t_effective
 
         if target_changed or self.last_set is None:
             self.last_target_trv = baseline
@@ -1017,7 +956,7 @@ class SmartOffsetController:
 
     async def _handle_active_control(self, inp: Inputs):
         t_room = inp.t_room
-        t_target = inp.t_target
+        t_target = inp.t_effective
         e = t_target - t_room
 
         deadband = float(self.opt(CONF_DEADBAND) or DEFAULT_DEADBAND)
@@ -1103,8 +1042,12 @@ class SmartOffsetController:
                     )
                     offset = new_offset  # Обновляем для дальнейших расчётов
 
-        # correction (P-like)
-        correction = _clamp(0.5 * e, -step_max, step_max)
+        # PID coefficients из опций (могут меняться во время работы)
+        self.pid.kp = float(self.opt(CONF_PID_KP) or DEFAULT_PID_KP)
+        self.pid.ki = float(self.opt(CONF_PID_KI) or DEFAULT_PID_KI)
+        self.pid.kd = float(self.opt(CONF_PID_KD) or DEFAULT_PID_KD)
+        # correction (PID)
+        correction = self.pid.update(e, t_target, inp.now_mono, step_max)
 
         # TTT soft landing (только при нагреве)
         if e > 0:
@@ -1202,7 +1145,7 @@ class SmartOffsetController:
                     inp.t_room,
                 )
 
-            e = inp.t_target - inp.t_room
+            e = inp.t_effective - inp.t_room
             self.last_error = round(e, 3)
 
             current_mode = inp.hvac_mode

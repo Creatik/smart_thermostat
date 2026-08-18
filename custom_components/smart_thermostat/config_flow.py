@@ -57,7 +57,11 @@ from .const import (
     # Новые константы
     CONF_WEATHER_ENTITY,
     CONF_WEATHER_FORECAST_TYPE,
+    CONF_OUTDOOR_SENSOR,
+    CONF_WEATHER_BASE_TEMP,
+    CONF_WEATHER_MAX_COMP,
     CONF_PRESENCE_ENTITY,
+    CONF_ECO_ENABLE,
     CONF_ECO_OFFSET,
     CONF_PREDICTIVE_FACTOR,
     CONF_PID_KP,
@@ -312,9 +316,41 @@ class SmartThermostatOptionsFlow(config_entries.OptionsFlow):
             ),
 
             vol.Optional(
+                CONF_OUTDOOR_SENSOR,
+                default=get_option(CONF_OUTDOOR_SENSOR)
+            ): EntitySelector(
+                EntitySelectorConfig(domain="sensor", device_class="temperature", multiple=False)
+            ),
+
+            vol.Optional(
+                CONF_WEATHER_BASE_TEMP,
+                default=get_option(CONF_WEATHER_BASE_TEMP, 5.0)
+            ): NumberSelector(
+                NumberSelectorConfig(
+                    min=-10.0, max=20.0, step=0.5,
+                    mode=NumberSelectorMode.BOX, unit_of_measurement="°C"
+                )
+            ),
+
+            vol.Optional(
+                CONF_WEATHER_MAX_COMP,
+                default=get_option(CONF_WEATHER_MAX_COMP, 5.0)
+            ): NumberSelector(
+                NumberSelectorConfig(
+                    min=0.0, max=10.0, step=0.5,
+                    mode=NumberSelectorMode.BOX, unit_of_measurement="°C"
+                )
+            ),
+
+            vol.Optional(
                 CONF_PRESENCE_ENTITY,
                 default=get_option(CONF_PRESENCE_ENTITY, [])
             ): EntitySelector(EntitySelectorConfig(multiple=True)),
+
+            vol.Optional(
+                CONF_ECO_ENABLE,
+                default=get_option(CONF_ECO_ENABLE, True)
+            ): BooleanSelector(),
 
             vol.Optional(
                 CONF_ECO_OFFSET,

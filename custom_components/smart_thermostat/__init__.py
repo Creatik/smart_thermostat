@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import logging
 
+import voluptuous as vol
+
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.exceptions import HomeAssistantError
 
 from .const import DOMAIN, PLATFORMS
 from .controller import SmartOffsetController
@@ -13,6 +16,64 @@ from .storage import OffsetStorage
 _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS: list[Platform] = ["sensor", "button", "climate", "switch"]  # Убедитесь, что совпадает с const.py
+
+# ========== СЕРВИСЫ ==========
+SERVICE_RESET_OFFSET = "reset_offset"
+SERVICE_START_BOOST = "start_boost"
+
+SERVICE_RESET_OFFSET_SCHEMA = vol.Schema({vol.Required("entry_id"): str})
+SERVICE_START_BOOST_SCHEMA = vol.Schema(
+    {
+        vol.Required("entry_id"): str,
+        vol.Optional("duration"): vol.All(vol.Coerce(int), vol.Range(min=30, max=3600)),
+    }
+)
+
+_services_registered = False
+
+
+def _get_controller(hass: HomeAssistant, entry_id: str):
+    """Получить контроллер по id записи."""
+    data = hass.data.get(DOMAIN, {})
+    return data.get(entry_id)
+
+
+async def _async_register_services(hass: HomeAssistant) -> None:
+    """Регистрирует сервисы интеграции (однократно)."""
+    global _services_registered
+    if _services_registered:
+        return
+    _services_registered = True
+
+    async def _handle_reset_offset(call: ServiceCall) -> None:
+        controller = _get_controller(hass, call.data["entry_id"])
+        if controller is None:
+            raise HomeAssistantError(
+                f"Запись {call.data['entry_id']} не найдена в интеграции {DOMAIN}"
+            )
+        await controller.reset_offset()
+
+    async def _handle_start_boost(call: ServiceCall) -> None:
+        controller = _get_controller(hass, call.data["entry_id"])
+        if controller is None:
+            raise HomeAssistantError(
+                f"Запись {call.data['entry_id']} не найдена в интеграции {DOMAIN}"
+            )
+        await controller.start_boost(call.data.get("duration"))
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_RESET_OFFSET,
+        _handle_reset_offset,
+        schema=SERVICE_RESET_OFFSET_SCHEMA,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_START_BOOST,
+        _handle_start_boost,
+        schema=SERVICE_START_BOOST_SCHEMA,
+    )
+    _LOGGER.debug("Сервисы %s зарегистрированы", DOMAIN)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -36,6 +97,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # Настраиваем платформы
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+    # Регистрируем сервисы (один раз на домен)
+    await _async_register_services(hass)
 
     # Запускаем контроллер
     await controller.async_start()

@@ -14,8 +14,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build ZIP (Home Assistant custom_component)
-        shell: bash
+      - name: Build ZIP
         run: |
           cd "${GITHUB_WORKSPACE}/custom_components/smart_thermostat"
           zip -r "${GITHUB_WORKSPACE}/smart_thermostat.zip" . \
@@ -28,8 +27,7 @@ jobs:
           tag: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
           draft: true
-          prerelease: false
-          generateReleaseNotes: false
+          generateReleaseNotes: true
           artifacts: "smart_thermostat.zip"
           artifactContentType: application/zip
           allowUpdates: true
