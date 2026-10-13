@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Optional
 
 
 @dataclass
@@ -17,3 +17,5 @@ class Inputs:
     hvac_mode: str
     window_open: bool
     now_mono: float
+    # Фактическая уставка, прочитанная с устройства (атрибут temperature)
+    trv_reported_setpoint: Optional[float] = None

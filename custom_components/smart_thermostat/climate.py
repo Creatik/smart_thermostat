@@ -26,31 +26,11 @@ from .const import (
     PRESET_NONE,
     PRESET_MODES,
 )
-
-
-def _to_float(value: Any) -> Optional[float]:
-    try:
-        return float(value)
-    except (ValueError, TypeError):
-        return None
-
-
-def _normalize_entity_list(value: Any) -> list[str]:
-    if value is None:
-        return []
-    if isinstance(value, str):
-        return [value]
-    if isinstance(value, (list, tuple)):
-        out = []
-        for v in value:
-            if v is None:
-                continue
-            if isinstance(v, str):
-                out.append(v)
-            elif isinstance(v, dict) and "entity_id" in v:
-                out.append(v["entity_id"])
-        return [x for x in out if x]
-    return []
+# берём из helpers.py, локальные копии плодить не нужно (см. правила проекта)
+from .helpers import (
+    normalize_entity_list as _normalize_entity_list,
+    to_float as _to_float,
+)
 
 
 async def async_setup_entry(
@@ -78,6 +58,7 @@ class SmartThermostatVirtual(ClimateEntity):
     _attr_hvac_modes = [HVACMode.HEAT, HVACMode.OFF]
     _attr_hvac_mode = HVACMode.HEAT
     _attr_temperature_unit = UnitOfTemperature.CELSIUS
+    _attr_target_temperature_step = 0.5
     _attr_icon = "mdi:thermostat"
     _attr_translation_key = "virtual_thermostat"
 
@@ -242,6 +223,15 @@ class SmartThermostatVirtual(ClimateEntity):
             "last_error": getattr(self.controller, "last_error", None),
             "window_open": getattr(self.controller, "window_is_open", False),
             "boost_active": getattr(self.controller, "boost_active", False),
+            # Диагностика контура управления
+            "pid_i": getattr(getattr(self.controller, "pid", None), "i", None),
+            "baseline": getattr(self.controller, "last_baseline", None),
+            "t_trv_calculated": getattr(self.controller, "last_target_trv", None),
+            "trv_reported_setpoint": getattr(
+                self.controller, "trv_reported_setpoint", None
+            ),
+            "setpoint_sync": getattr(self.controller, "trv_setpoint_sync", "unknown"),
+            "valve_switch": getattr(self.controller, "_get_valve_switch", lambda: None)(),
         }
 
     async def async_set_temperature(self, **kwargs: Any) -> None:

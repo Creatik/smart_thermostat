@@ -7,8 +7,9 @@ PLATFORMS = ["sensor", "button", "climate", "switch"]
 SIGNAL_UPDATE = "smart_thermostat_update"
 
 # Жёсткие пределы (не конфигурируются)
-MIN_OFFSET = -10.0
-MAX_OFFSET = 10.0
+# Сужены с ±10 до ±6: при ±10 обучение улетало в пол и не могло вернуться
+MIN_OFFSET = -6.0
+MAX_OFFSET = 6.0
 
 # ========== КОНФИГУРАЦИОННЫЕ КОНСТАНТЫ ==========
 
@@ -41,6 +42,7 @@ CONF_MIN_ON_SEC = "min_on_sec"      # мин. время «включено» п
 CONF_MIN_OFF_SEC = "min_off_sec"    # мин. время «выключено» перед повышением уставки (анти-дребезг)
 CONF_VALVE_EXERCISE_DAYS = "valve_exercise_days"  # период автопрокрутки клапана (0 = выкл)
 CONF_VALVE_EXERCISE_SEC = "valve_exercise_sec"    # длительность автопрокрутки, сек
+CONF_VALVE_SWITCH_ENTITY = "valve_switch_entity"  # переключатель клапана (напр. switch.*_state для Tuya-TRV через Z2M)
 
 # Пресеты (настроенные целевые температуры)
 CONF_PRESET_COMFORT_TEMP = "preset_comfort_temp"
@@ -57,6 +59,7 @@ CONF_ENABLE_LEARNING = "enable_learning"
 CONF_LEARN_RATE_FAST = "learn_rate_fast"
 CONF_LEARN_RATE_SLOW = "learn_rate_slow"
 CONF_MIN_OFFSET_CHANGE = "min_offset_change"
+CONF_MAX_OFFSET_STEP = "max_offset_step"          # макс. изменение offset за один тик (анти-взлёт)
 CONF_NO_LEARN_SUMMER = "no_learn_summer"
 CONF_WINDOW_OPEN_NO_LEARN_MIN = "window_open_no_learn_min"  # в минутах
 CONF_COOLDOWN_REDUCTION_FACTOR = "cooldown_reduction_factor"
@@ -94,6 +97,11 @@ CONF_PID_KD = "pid_kd"
 # Режим HVAC (если используется в опциях)
 CONF_HVAC_MODE = "hvac_mode"
 
+# «Живые» опции: меняются часто (UI/автоматизации). Их изменение НЕ требует
+# перезагрузки записи — иначе все сущности мигают «unavailable» в логбуке
+# при каждой смене целевой температуры или режима (см. async_update_options)
+RUNTIME_OPTION_KEYS = {CONF_ROOM_TARGET, CONF_HVAC_MODE}
+
 # ========== ПРЕСЕТЫ ==========
 # Ключи активного пресета (внутренние значения для preset_mode)
 PRESET_NONE = "none"
@@ -127,6 +135,7 @@ DEFAULT_BOOST_DURATION_SEC = 300
 DEFAULT_LEARN_RATE_FAST = 0.5
 DEFAULT_LEARN_RATE_SLOW = 0.07
 DEFAULT_MIN_OFFSET_CHANGE = 0.1
+DEFAULT_MAX_OFFSET_STEP = 0.3
 DEFAULT_WINDOW_OPEN_NO_LEARN_SEC = 10  # в минутах
 DEFAULT_HEATING_ALPHA = 0.1
 DEFAULT_OVERSHOOT_THRESHOLD = 0.5
@@ -179,12 +188,14 @@ DEFAULTS = {
     # Окна и boost
     CONF_WINDOW_SENSORS: [],
     CONF_BOOST_DURATION_SEC: DEFAULT_BOOST_DURATION_SEC,
+    CONF_VALVE_SWITCH_ENTITY: None,
 
     # Обучение и адаптация
     CONF_ENABLE_LEARNING: True,
     CONF_LEARN_RATE_FAST: DEFAULT_LEARN_RATE_FAST,
     CONF_LEARN_RATE_SLOW: DEFAULT_LEARN_RATE_SLOW,
     CONF_MIN_OFFSET_CHANGE: DEFAULT_MIN_OFFSET_CHANGE,
+    CONF_MAX_OFFSET_STEP: DEFAULT_MAX_OFFSET_STEP,
     CONF_NO_LEARN_SUMMER: False,
     CONF_WINDOW_OPEN_NO_LEARN_MIN: DEFAULT_WINDOW_OPEN_NO_LEARN_SEC,  # в минутах
 

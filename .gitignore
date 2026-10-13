@@ -1,2 +1,4 @@
 __pycache__/*
 .history
+custom_components/smart_thermostat/plans
+.codeassistant

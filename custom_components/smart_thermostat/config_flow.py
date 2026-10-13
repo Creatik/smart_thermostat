@@ -39,6 +39,8 @@ from .const import (
     CONF_BOOST_DURATION_SEC,
     CONF_VALVE_EXERCISE_DAYS,
     CONF_VALVE_EXERCISE_SEC,
+    CONF_VALVE_SWITCH_ENTITY,
+    CONF_MAX_OFFSET_STEP,
     CONF_ENABLE_LEARNING,
     CONF_STUCK_ENABLE,
     CONF_STUCK_SECONDS,
@@ -82,28 +84,13 @@ from .const import (
     DEFAULT_PRESET_AWAY_TEMP,
     DEFAULT_PRESET_SLEEP_TEMP,
     DEFAULTS,
+    RUNTIME_OPTION_KEYS,
 )
 
 _LOGGER = logging.getLogger(__name__)
 
-
-def _normalize_entity_list(value: Any) -> list[str]:
-    """Нормализация значений селектора в список entity_id."""
-    if value is None:
-        return []
-    if isinstance(value, str):
-        return [value]
-    if isinstance(value, (list, tuple)):
-        out = []
-        for v in value:
-            if v is None:
-                continue
-            if isinstance(v, str):
-                out.append(v)
-            elif isinstance(v, dict) and "entity_id" in v:
-                out.append(v["entity_id"])
-        return [x for x in out if x]
-    return []
+# берём из helpers.py, локальные копии плодить не нужно (см. правила проекта)
+from .helpers import normalize_entity_list as _normalize_entity_list
 
 
 class SmartThermostatConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -179,6 +166,13 @@ class SmartThermostatOptionsFlow(config_entries.OptionsFlow):
 
     async def async_step_init(self, user_input=None):
         if user_input is not None:
+            # async_create_entry в options flow ПОЛНОСТЬЮ заменяет options, а живые
+            # ключи (room_target, hvac_mode) в форме отсутствуют — без переноса они
+            # терялись бы при каждом сохранении настроек
+            for key in RUNTIME_OPTION_KEYS:
+                if key not in user_input and key in self._config_entry.options:
+                    user_input[key] = self._config_entry.options[key]
+
             changed_keys = [
                 k for k, v in user_input.items()
                 if self._config_entry.options.get(k) != v
@@ -204,6 +198,13 @@ class SmartThermostatOptionsFlow(config_entries.OptionsFlow):
             return val
 
         schema = vol.Schema({
+            # Переключатель клапана (для Tuya-TRV через Z2M — switch.<имя>_state):
+            # при работе через него клапан гарантированно закрывается при достижении цели
+            vol.Optional(
+                CONF_VALVE_SWITCH_ENTITY,
+                default=get_entity_option(CONF_VALVE_SWITCH_ENTITY)
+            ): EntitySelector(EntitySelectorConfig(domain="switch", multiple=False)),
+
             vol.Optional(
                 CONF_WINDOW_SENSORS,
                 default=get_option(CONF_WINDOW_SENSORS, [])
@@ -238,6 +239,10 @@ class SmartThermostatOptionsFlow(config_entries.OptionsFlow):
             ),
 
             vol.Optional(CONF_ENABLE_LEARNING, default=get_option(CONF_ENABLE_LEARNING)): BooleanSelector(),
+
+            vol.Optional(CONF_MAX_OFFSET_STEP, default=get_option(CONF_MAX_OFFSET_STEP)): NumberSelector(
+                NumberSelectorConfig(min=0.05, max=1.0, step=0.05, mode=NumberSelectorMode.BOX, unit_of_measurement="°C/тик")
+            ),
 
             vol.Optional(CONF_NO_LEARN_SUMMER, default=get_option(CONF_NO_LEARN_SUMMER)): BooleanSelector(),
 

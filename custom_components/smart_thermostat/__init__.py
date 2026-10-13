@@ -9,7 +9,7 @@ from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import HomeAssistantError
 
-from .const import DOMAIN, PLATFORMS
+from .const import DOMAIN, PLATFORMS, RUNTIME_OPTION_KEYS
 from .controller import SmartOffsetController
 from .storage import OffsetStorage
 
@@ -36,6 +36,11 @@ def _get_controller(hass: HomeAssistant, entry_id: str):
     """Получить контроллер по id записи."""
     data = hass.data.get(DOMAIN, {})
     return data.get(entry_id)
+
+
+def _options_snapshot_key(entry_id: str) -> str:
+    """Ключ в hass.data для снимка опций записи (см. async_update_options)."""
+    return f"options_snapshot_{entry_id}"
 
 
 async def _async_register_services(hass: HomeAssistant) -> None:
@@ -95,6 +100,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     controller = SmartOffsetController(hass, entry, storage)
     hass.data[DOMAIN][entry.entry_id] = controller
 
+    # Снимок опций: нужен в async_update_options, чтобы отличать смену «живых»
+    # ключей (room_target, hvac_mode) от реальной переконфигурации записи
+    hass.data[DOMAIN][_options_snapshot_key(entry.entry_id)] = dict(entry.options)
+
     # Настраиваем платформы
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
@@ -112,9 +121,31 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def async_update_options(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Обновление опций — перезагружаем запись."""
-    _LOGGER.info("Опции обновлены для %s — перезагрузка", entry.entry_id)
-    await hass.config_entries.async_reload(entry.entry_id)
+    """Обновление опций.
+
+    Перезагрузка нужна только для «настраиваемых» опций (PID, интервалы, сенсоры).
+    «Живые» ключи из RUNTIME_OPTION_KEYS (room_target, hvac_mode) контроллер читает
+    через opt() на каждом тике — reload из-за них лишь мигает «unavailable» в логбуке
+    (автоматизация по времени меняла температуру 4 раза в день, и каждый раз запись
+    полностью перезагружалась).
+    """
+    snapshot = hass.data[DOMAIN].get(_options_snapshot_key(entry.entry_id), {})
+    hass.data[DOMAIN][_options_snapshot_key(entry.entry_id)] = dict(entry.options)
+
+    keys = set(snapshot) | set(entry.options)
+    config_changed = any(
+        key not in RUNTIME_OPTION_KEYS
+        and entry.options.get(key) != snapshot.get(key)
+        for key in keys
+    )
+
+    if config_changed:
+        _LOGGER.info("Опции обновлены для %s — перезагрузка", entry.entry_id)
+        await hass.config_entries.async_reload(entry.entry_id)
+    else:
+        _LOGGER.debug(
+            "Живая опция обновлена для %s — без перезагрузки", entry.entry_id
+        )
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -125,6 +156,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if controller:
         await controller.async_stop()
         hass.data[DOMAIN].pop(entry.entry_id, None)
+
+    hass.data[DOMAIN].pop(_options_snapshot_key(entry.entry_id), None)
 
     # Выгружаем платформы
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)

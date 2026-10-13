@@ -46,9 +46,12 @@ class PIDController:
             self.prev_time = now_mono
             return self._clamp(self.kp * e, step_max)
 
-        # Анти-виндиап: интегрируем только пока P-член не насыщен
+        # Анти-виндиап: интегрируем только пока P-член не насыщен.
+        # dt нормализован к МИНУТАМ: при dt в секундах (интервал тика 240 с)
+        # интеграл насыщался до i_limit за один тик и работал как реле —
+        # любая ошибка дольше тика мгновенно давала максимальную коррекцию
         if abs(self.kp * e) < step_max:
-            self.i += self.ki * e * dt
+            self.i += self.ki * e * (dt / 60.0)
             self.i = self._clamp(self.i, i_limit)
 
         deriv = (e - self.prev_e) / dt if dt > 0 else 0.0

@@ -5,6 +5,8 @@ import time
 from typing import Any, Dict, List, Optional
 from datetime import datetime, timedelta
 
+from .const import MIN_OFFSET, MAX_OFFSET
+
 
 _STORAGE_VERSION = 1
 _STORAGE_KEY = "smart_thermostat"
@@ -113,7 +115,13 @@ class OffsetStorage:
             return 0.0
 
     async def set_offset(self, entry_id: str, offset: float, reason: str = "") -> None:
-        """Установить смещение и сохранить время изменения."""
+        """Установить смещение и сохранить время изменения.
+
+        Жёсткий кламп в MIN_OFFSET..MAX_OFFSET прямо в точке записи: раньше
+        (старая версия кода) сюда попадали значения до -10 — обучение улетало
+        в предел. Все прочие клампы в controller.py остаются как «мягкая» защита.
+        """
+        offset = max(MIN_OFFSET, min(MAX_OFFSET, float(offset)))
         async with self._lock:
             entry_data = self._data.setdefault(entry_id, {})
             old_offset = entry_data.get("offset", 0.0)
@@ -201,7 +209,9 @@ class OffsetStorage:
         history = entry_data.get("offset_history", [])
         
         history.append({
-            "timestamp": self.hass.loop.time(),
+            # epoch (а не hass.loop.time()): монотонные часы несравнимы
+            # с epoch-чисткой по возрасту в _cleanup_entry_history
+            "timestamp": time.time(),
             "offset": float(offset),
             "reason": reason
         })
@@ -243,7 +253,7 @@ class OffsetStorage:
         history = entry_data.get("heating_rate_history", [])
         
         history.append({
-            "timestamp": self.hass.loop.time(),
+            "timestamp": time.time(),
             "rate": float(rate),
             "reason": reason
         })
@@ -302,7 +312,7 @@ class OffsetStorage:
             history = entry_data.get("overshoot_history", [])
             
             history.append({
-                "timestamp": self.hass.loop.time(),
+                "timestamp": time.time(),
                 "temperature": float(temperature),
                 "overshoot": float(overshoot),
                 "reason": reason
@@ -393,14 +403,24 @@ class OffsetStorage:
         await self.async_save()
 
     def get_valve_exercise(self, entry_id: str) -> float:
-        """Время последней автопрокрутки клапана (loop.time()). 0 — никогда."""
+        """Время последней автопрокрутки клапана (epoch, сек). 0 — никогда.
+
+        Раньше хранились монотонные часы (hass.loop.time()) — они обнуляются
+        при каждом рестарте HA, из-за чего автопрокрутка откладывалась на новые
+        exercise_days аптайма (при рестартах чаще раза в неделю — никогда).
+        Старые монотонные значения (< 1e9) считаем «никогда»: после обновления
+        будет одна внеплановая прокрутка, дальше — корректно.
+        """
         try:
-            return float(self._data.get(entry_id, {}).get("valve_exercise", 0.0))
+            ts = float(self._data.get(entry_id, {}).get("valve_exercise", 0.0))
         except (ValueError, TypeError):
             return 0.0
+        if ts < 1e9:
+            return 0.0
+        return ts
 
     async def set_valve_exercise(self, entry_id: str, ts: float) -> None:
-        """Сохранить время последней автопрокрутки клапана."""
+        """Сохранить время последней автопрокрутки клапана (epoch, сек)."""
         async with self._lock:
             entry_data = self._data.setdefault(entry_id, {})
             entry_data["valve_exercise"] = float(ts)
@@ -415,4 +435,36 @@ class OffsetStorage:
         async with self._lock:
             entry_data = self._data.setdefault(entry_id, {})
             entry_data["preset"] = str(preset)
+        await self.async_save()
+
+    # ========== AUTO-TUNE И СЧЁТЧИК ЗАПИСЕЙ УСТАВКИ ==========
+
+    def get_learn_rate_slow(self, entry_id: str) -> Optional[dict]:
+        """Результат auto-tune learn_rate_slow: {"base": ..., "tuned": ...} или None.
+
+        base — значение опции на момент auto-tune: если пользователь его сменит,
+        сохранённый tuned-результат перестаёт применяться (контроллер в async_start).
+        """
+        val = self._data.get(entry_id, {}).get("learn_rate_slow")
+        return val if isinstance(val, dict) else None
+
+    async def set_learn_rate_slow(self, entry_id: str, base: float, tuned: float) -> None:
+        """Сохранить результат auto-tune learn_rate_slow."""
+        async with self._lock:
+            entry_data = self._data.setdefault(entry_id, {})
+            entry_data["learn_rate_slow"] = {"base": float(base), "tuned": float(tuned)}
+        await self.async_save()
+
+    def get_change_count(self, entry_id: str) -> int:
+        """Счётчик записей уставки (персистится, чтобы переживать reload)."""
+        try:
+            return int(self._data.get(entry_id, {}).get("change_count", 0))
+        except (ValueError, TypeError):
+            return 0
+
+    async def set_change_count(self, entry_id: str, count: int) -> None:
+        """Сохранить счётчик записей уставки."""
+        async with self._lock:
+            entry_data = self._data.setdefault(entry_id, {})
+            entry_data["change_count"] = int(count)
         await self.async_save()

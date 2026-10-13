@@ -45,7 +45,9 @@ class SensorDefinition:
 
 
 
-# Маппинг действий для last_action_text
+# Маппинг действий для last_action_text.
+# Держать синхронным с фактическими значениями last_action в controller.py —
+# раньше ~10 действий не были отражены и диагностика показывала "unknown"
 ACTION_MAPPING = {
     "skipped_unavailable_entities": "waiting",
     "set_temperature": "set",
@@ -56,8 +58,10 @@ ACTION_MAPPING = {
     "overheated": "idle",
     "long_idle_min_temp": "idle",
     "stuck_overtemp_down": "stuck",
+    "stuck_underheat_resend": "stuck",
     "deadband_rebase": "rebase",
     "deadband_init": "init",
+    "deadband_step_down": "step_down",
     "stable_learn": "learn",
     "reset_offset": "reset",
     "window_open": "window",
@@ -71,6 +75,14 @@ ACTION_MAPPING = {
     "no_room_sensors": "no_sensors",
     "no_valid_room_temp": "no_temp",
     "climate_unavailable": "climate_off",
+    "skipped_no_change": "hold",
+    "anti_chatter": "hold",
+    "hvac_off_valve_closed": "off",
+    "valve_exercise": "exercise",
+    "operational": "ok",
+    "waiting_sensors": "waiting",
+    "init_error_retry": "init",
+    "set_hvac_mode_failed": "error",
 }
 
 

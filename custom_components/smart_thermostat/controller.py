@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 
 from datetime import datetime, timedelta
 from typing import Any, Optional, Tuple, Dict
@@ -51,6 +52,11 @@ class SmartOffsetController:
         self.last_error: Optional[float] = None
         self.last_target_trv: Optional[float] = None
         self.change_count = 0
+        # верификация уставки TRV и управление клапаном через переключатель
+        self.trv_reported_setpoint: Optional[float] = None
+        self.trv_setpoint_sync = "unknown"
+        self.last_baseline: Optional[float] = None
+        self._last_valve_switch_time = 0.0
         # анти-дребезг: направление последнего изменения уставки
         self._last_set_direction = 0
         self._last_set_direction_time = 0.0
@@ -105,6 +111,10 @@ class SmartOffsetController:
         self._stuck_ref_temp: Optional[float] = None
         self._stuck_ref_time: Optional[float] = None
         self._stuck_bias = 0.0
+        # stuck-underheat: комната должна греться (e > deadband), но не греется
+        self._stuck_cold_active = False
+        self._stuck_cold_ref_temp: Optional[float] = None
+        self._stuck_cold_ref_time: Optional[float] = None
 
         self._heat_episode: Optional[Dict[str, float]] = None
         self._minutes_per_degree = (
@@ -137,50 +147,49 @@ class SmartOffsetController:
         async_dispatcher_send(self.hass, f"{SIGNAL_UPDATE}_{self.entry.entry_id}")
 
     # -------------------------
-    # Yandex helpers
+    # Переключатель клапана (явная настройка)
     # -------------------------
-    def _is_yandex_power_controlled(self, climate_entity: str) -> bool:
-        """Определяет, управляется ли питание устройства через отдельный switch (Yandex/Alika)"""
-        switch_entities = [
-            f"switch.{climate_entity.split('.')[-1]}_state",
-            f"switch.{climate_entity.split('.')[-1]}_power",
-            f"switch.{climate_entity.replace('climate.', 'switch.')}_state",
-        ]
-        for entity in switch_entities:
-            state = self.hass.states.get(entity)
-            if state and state.state in ("on", "off"):
-                return True
-        return False
+    def _get_valve_switch(self) -> Optional[str]:
+        """Entity_id переключателя клапана (например, switch.*_state у Tuya-TRV через Z2M).
 
-    async def _ensure_yandex_power(self, climate_entity: str, target_state: str):
-        """Включает/выключает питание Yandex-устройств при переходе режимов"""
-        switch_entities = [
-            f"switch.{climate_entity.split('.')[-1]}_state",
-            f"switch.{climate_entity.split('.')[-1]}_power",
-            f"switch.{climate_entity.replace('climate.', 'switch.')}_state",
-        ]
-        
-        for entity in switch_entities:
-            state = self.hass.states.get(entity)
-            if not state:
-                continue
-                
-            is_on = state.state == "on"
-            need_turn_on = target_state == "on" and not is_on
-            need_turn_off = target_state == "off" and is_on
-            
-            if need_turn_on or need_turn_off:
-                service = "turn_on" if need_turn_on else "turn_off"
-                try:
-                    await self.hass.services.async_call(
-                        "switch", service, {"entity_id": entity}, blocking=True
-                    )
-                    LOGGER.info("Yandex power %s: %s → %s", service, entity, target_state)
-                    if need_turn_on:
-                        await asyncio.sleep(1)
-                    break
-                except Exception as e:
-                    LOGGER.warning("Failed to %s Yandex switch %s: %s", service, entity, e)
+        Настраивается явно опцией valve_switch_entity. Прежняя авто-детекция
+        «Яндекс-питания» ошибочно захватывала switch.*_state Zigbee2MQTT-устройств
+        и сама открывала клапан, из-за чего он не закрывался.
+        """
+        val = self.opt(CONF_VALVE_SWITCH_ENTITY)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+        return None
+
+    async def _set_valve_switch(self, on: bool, force: bool = False) -> None:
+        """Открыть/закрыть клапан через настроенный переключатель."""
+        entity = self._get_valve_switch()
+        if not entity:
+            return
+
+        state = self.hass.states.get(entity)
+        if state is None or state.state not in ("on", "off"):
+            return
+
+        if state.state == ("on" if on else "off"):
+            return
+
+        # защита от дребезга: не чаще одного переключения в 30 секунд
+        now = self.hass.loop.time()
+        if not force and (now - self._last_valve_switch_time) < 30:
+            return
+        self._last_valve_switch_time = now
+
+        try:
+            await self.hass.services.async_call(
+                "switch",
+                "turn_on" if on else "turn_off",
+                {"entity_id": entity},
+                blocking=True,
+            )
+            LOGGER.info("Клапан %s → %s", entity, "открыт" if on else "закрыт")
+        except Exception as e:
+            LOGGER.warning("Не удалось переключить клапан %s: %s", entity, e)
 
     # -------------------------
     # lifecycle
@@ -188,9 +197,22 @@ class SmartOffsetController:
     async def async_start(self):
         self._heating_rate = self.storage.get_heating_rate(self.entry.entry_id)
         self._overshoot_count = self.storage.get_overshoot_count(self.entry.entry_id)
+        if hasattr(self.storage, "get_change_count"):
+            self.change_count = self.storage.get_change_count(self.entry.entry_id)
         self._learn_rate_slow = float(
             self.opt(CONF_LEARN_RATE_SLOW) or DEFAULT_LEARN_RATE_SLOW
         )
+        # восстанавливаем auto-tune learn_rate_slow, если настроенная база
+        # (CONF_LEARN_RATE_SLOW) не менялась пользователем — иначе начинаем заново
+        tuned = (
+            self.storage.get_learn_rate_slow(self.entry.entry_id)
+            if hasattr(self.storage, "get_learn_rate_slow")
+            else None
+        )
+        if tuned and abs(float(tuned.get("base", 0.0)) - self._learn_rate_slow) < 1e-9:
+            self._learn_rate_slow = max(
+                0.01, float(tuned.get("tuned", self._learn_rate_slow))
+            )
 
         interval = int(self.opt(CONF_INTERVAL_SEC) or DEFAULT_INTERVAL_SEC)
         
@@ -222,6 +244,10 @@ class SmartOffsetController:
         await self.storage.set_overshoot_count(
             self.entry.entry_id, self._overshoot_count
         )
+        if hasattr(self.storage, "set_change_count"):
+            await self.storage.set_change_count(
+                self.entry.entry_id, self.change_count
+            )
 
         if self._unsub_sensor_appear:
             try:
@@ -350,11 +376,13 @@ class SmartOffsetController:
         self.last_action = "valve_exercise"
         self.last_target_trv = t_trv
         await self._set_trv_temperature(inp.climate_entity, t_trv)
+        # прокрутка клапана требует открытого клапана
+        await self._set_valve_switch(True, force=True)
 
         async def _end(_):
             self._cancel_valve_exercise()
             await self.storage.set_valve_exercise(
-                self.entry.entry_id, self.hass.loop.time()
+                self.entry.entry_id, time.time()
             )
             await self.trigger_once(force=True)
             self._notify()
@@ -371,6 +399,9 @@ class SmartOffsetController:
         self._stuck_ref_temp = None
         self._stuck_ref_time = None
         self._stuck_bias = 0.0
+        self._stuck_cold_active = False
+        self._stuck_cold_ref_temp = None
+        self._stuck_cold_ref_time = None
         self._reset_pid()
 
     def _reset_pid(self):
@@ -419,15 +450,6 @@ class SmartOffsetController:
         )
 
     async def _set_trv_temperature(self, entity_id: str, temp: float) -> bool:
-        # Защита: не устанавливать температуру для Yandex-устройств в режиме OFF
-        if (self._prev_hvac_mode_config == HVACMode.OFF.value and
-            self._is_yandex_power_controlled(entity_id)):
-            LOGGER.debug(
-                "Ignored set_temperature for Yandex device %s in OFF mode (power already off)",
-                entity_id
-            )
-            return False
-
         now = self.hass.loop.time()
 
         if self.last_set is not None and abs(temp - self.last_set) < 0.01:
@@ -450,6 +472,14 @@ class SmartOffsetController:
                 self._last_set_direction_time = now
             self.change_count += 1
             self._force_next_control = False
+            # персистим счётчик порциями по 10 (и при остановке): иначе после
+            # reload критерий здоровья «total_changes растёт медленно» не наблюдаем
+            if self.change_count % 10 == 0 and hasattr(
+                self.storage, "set_change_count"
+            ):
+                await self.storage.set_change_count(
+                    self.entry.entry_id, self.change_count
+                )
             return True
         except Exception as e:
             LOGGER.error("Ошибка установки температуры на %s: %s", entity_id, e)
@@ -676,6 +706,9 @@ class SmartOffsetController:
             hvac_mode=hvac_mode,
             window_open=window_open,
             now_mono=now_mono,
+            trv_reported_setpoint=_to_float(
+                climate_state.attributes.get("temperature")
+            ),
         )
 
     # -------------------------
@@ -772,6 +805,22 @@ class SmartOffsetController:
             or long_window_open
             or self.last_set is None
         ):
+            return
+
+        # ГВАРДЫ против самоусиления (раньше offset улетал в предел из-за их отсутствия):
+        # 1) комната реально у цели, а не перегрета
+        e_now = inp.t_effective - inp.t_room
+        if abs(e_now) > max(0.1, deadband * 0.5):
+            return
+        # 2) текущая уставка не прижата к пределам TRV (нерепрезентативна)
+        trv_min = float(self.opt(CONF_TRV_MIN) or DEFAULT_TRV_MIN)
+        trv_max = float(self.opt(CONF_TRV_MAX) or DEFAULT_TRV_MAX)
+        if abs(self.last_set - trv_min) < 0.01 or abs(self.last_set - trv_max) < 0.01:
+            return
+        # 3) уставка равна baseline (не завышена PID-коррекцией активной фазы)
+        offset_now = self.storage.get_offset(self.entry.entry_id)
+        step_min = float(self.opt(CONF_STEP_MIN) or DEFAULT_STEP_MIN)
+        if abs(self.last_set - (inp.t_effective + offset_now)) > step_min + 1e-9:
             return
 
         if self._stable_since is None or self._stable_target != inp.t_effective:
@@ -883,6 +932,12 @@ class SmartOffsetController:
             return
 
         current_rate = dT / dt_min
+        # усредняем только рост: сквозняк/открытая дверь дают dT < 0 и
+        # замусоривают EMA (отрицательный heating_rate в истории спальни
+        # отключал всю предикцию из-за гарда heating_rate > 0.001)
+        if current_rate <= 0:
+            return
+
         self._heating_rate = (
             heating_alpha * current_rate + (1.0 - heating_alpha) * self._heating_rate
         )
@@ -931,10 +986,51 @@ class SmartOffsetController:
 
             return t_trv, False
 
+        # Stuck-underheat (обратная сторона): комната должна греться
+        # (e > deadband), но за stuck_seconds не поднялась даже на stuck_min_drop
+        # — вероятно, команда уставки потеряна (Zigbee) или клапан закрыт.
+        # Переотправляем уставку на следующем тике и открываем клапан, если
+        # он настроен. Уставку не трогаем — PID уже вычислил правильную.
+        if e > deadband:
+            if not self._stuck_cold_active:
+                self._stuck_cold_active = True
+                self._stuck_cold_ref_temp = t_room
+                self._stuck_cold_ref_time = now_mono
+            elif (
+                self._stuck_cold_ref_time is not None
+                and (now_mono - self._stuck_cold_ref_time) >= stuck_seconds
+            ):
+                ref_temp = (
+                    self._stuck_cold_ref_temp
+                    if self._stuck_cold_ref_temp is not None
+                    else t_room
+                )
+                if t_room <= ref_temp + stuck_min_drop:
+                    LOGGER.warning(
+                        "Stuck-underheat %s: за %d сек комната не нагрелась "
+                        "(%.1f → %.1f) при ошибке %.2f — переотправка уставки",
+                        self.entry.entry_id,
+                        stuck_seconds,
+                        ref_temp,
+                        t_room,
+                        e,
+                    )
+                    self.last_action = "stuck_underheat_resend"
+                    self._force_next_control = True
+                    await self._set_valve_switch(True)
+                # сброс трекинга: если комната растёт — перезапустится на след. тике
+                self._stuck_cold_active = False
+                self._stuck_cold_ref_temp = None
+                self._stuck_cold_ref_time = None
+            return t_trv, False
+
         self._stuck_active = False
         self._stuck_ref_temp = None
         self._stuck_ref_time = None
         self._stuck_bias = 0.0
+        self._stuck_cold_active = False
+        self._stuck_cold_ref_temp = None
+        self._stuck_cold_ref_time = None
         return t_trv, False
 
     # -------------------------
@@ -943,25 +1039,21 @@ class SmartOffsetController:
     async def _handle_hvac_off(self, inp: Inputs):
         self._cancel_boost()
 
-        # ШАГ 1: Устанавливаем минимальную температуру для надёжного закрытия клапана (для ВСЕХ устройств)
+        # ШАГ 1: минимальная уставка для надёжного закрытия клапана
         trv_min = float(self.opt(CONF_TRV_MIN) or DEFAULT_TRV_MIN)
         step_min = float(self.opt(CONF_STEP_MIN) or DEFAULT_STEP_MIN)
         t_trv = _round_step(trv_min, step_min)
         await self._set_trv_temperature(inp.climate_entity, t_trv)
 
-        # ШАГ 2: Дополнительные действия в зависимости от типа устройства
-        if self._is_yandex_power_controlled(inp.climate_entity):
-            # Для Yandex: даём время на отправку команды температуры, потом выключаем питание
-            await asyncio.sleep(0.5)
-            await self._ensure_yandex_power(inp.climate_entity, "off")
-            self.last_action = "hvac_off_yandex_temp_then_power_off"
-        else:
-            # Для обычных устройств — режим OFF
-            try:
-                await self._set_trv_hvac_mode(inp.climate_entity, HVACMode.OFF)
-            except Exception as e:
-                LOGGER.warning("set_hvac_mode:off failed for %s: %s", inp.climate_entity, e)
-            self.last_action = "hvac_off_with_min_temp"
+        # ШАГ 2: клапан закрыть через переключатель (если настроен)
+        await self._set_valve_switch(False, force=True)
+
+        # ШАГ 3: режим OFF на устройстве
+        try:
+            await self._set_trv_hvac_mode(inp.climate_entity, HVACMode.OFF)
+        except Exception as e:
+            LOGGER.warning("set_hvac_mode:off failed for %s: %s", inp.climate_entity, e)
+        self.last_action = "hvac_off_valve_closed"
 
         self._stuck_bias = 0.0
         self._reset_stability_tracking()
@@ -980,6 +1072,9 @@ class SmartOffsetController:
 
         if self.last_set is None or abs(t_trv - self.last_set) >= (step_min - 1e-9):
             await self._set_trv_temperature(inp.climate_entity, t_trv)
+
+        # Окно открыто — клапан гарантированно закрыть
+        await self._set_valve_switch(False, force=True)
 
         self.last_action = "window_open"
         self._stuck_bias = 0.0
@@ -1003,6 +1098,9 @@ class SmartOffsetController:
         if self.last_set is None or abs(t_trv - self.last_set) >= (step_min - 1e-9):
             await self._set_trv_temperature(inp.climate_entity, t_trv)
 
+        # Boost — клапан открыть
+        await self._set_valve_switch(True, force=True)
+
         self.last_action = "boost"
         return True
 
@@ -1013,7 +1111,9 @@ class SmartOffsetController:
         if abs(e) > deadband:
             return False
 
-        offset = self.storage.get_offset(self.entry.entry_id)
+        offset = _clamp(
+            self.storage.get_offset(self.entry.entry_id), MIN_OFFSET, MAX_OFFSET
+        )
         trv_min = float(self.opt(CONF_TRV_MIN) or DEFAULT_TRV_MIN)
         trv_max = float(self.opt(CONF_TRV_MAX) or DEFAULT_TRV_MAX)
         step_min = float(self.opt(CONF_STEP_MIN) or DEFAULT_STEP_MIN)
@@ -1021,6 +1121,7 @@ class SmartOffsetController:
         baseline = _round_step(
             _clamp(inp.t_effective + offset, trv_min, trv_max), step_min
         )
+        self.last_baseline = baseline
 
         target_changed = (
             self._last_room_target is not None
@@ -1040,7 +1141,24 @@ class SmartOffsetController:
             self._reset_stability_tracking()
             return True
 
-        # ← ДОБАВЛЕНО: распад избыточного смещения прямо в удержании
+        # PID в удержании не вызывается — сбрасываем, чтобы интеграл не «висел»
+        self._reset_pid()
+
+        # Выше цели: клапан закрыть и плавно снизить уставку к baseline
+        # (раньше здесь был вечный hold завышенной уставки)
+        if e < -1e-9:
+            await self._set_valve_switch(False)
+            if self.last_set is not None and self.last_set > baseline + 1e-9:
+                new_set = _round_step(
+                    max(baseline, self.last_set - step_min), step_min
+                )
+                if new_set <= self.last_set - (step_min - 1e-9):
+                    await self._set_trv_temperature(inp.climate_entity, new_set)
+                    self.last_action = "deadband_step_down"
+                    self.last_target_trv = new_set
+                    return True
+
+        # Распад избыточного смещения прямо в удержании
         enable_learning = bool(self.opt(CONF_ENABLE_LEARNING))
         await self._handle_offset_decay(inp.now_mono, enable_learning, inp)
 
@@ -1079,12 +1197,20 @@ class SmartOffsetController:
         stuck_min_drop = float(self.opt(CONF_STUCK_MIN_DROP) or DEFAULT_STUCK_MIN_DROP)
         stuck_step = float(self.opt(CONF_STUCK_STEP) or DEFAULT_STUCK_STEP)
 
+        # Переключатель клапана (если настроен): гистерезис по ошибке
+        if e > deadband:
+            await self._set_valve_switch(True)
+        elif e < -deadband:
+            await self._set_valve_switch(False)
+
         # TTT learning episode
         self._maybe_start_heat_episode(inp.now_mono, t_room, t_target, deadband)
         self._update_heat_episode(t_room)
         await self._maybe_finish_heat_episode(inp.now_mono, t_room, t_target, deadband)
 
-        offset = self.storage.get_offset(self.entry.entry_id)
+        offset = _clamp(
+            self.storage.get_offset(self.entry.entry_id), MIN_OFFSET, MAX_OFFSET
+        )
 
         # overshoot auto-tune
         if t_room > t_target + overshoot_threshold:
@@ -1099,6 +1225,17 @@ class SmartOffsetController:
                     self._learn_rate_slow,
                 )
                 self._overshoot_count = 0
+                # персистим результат auto-tune (иначе терялся при reload);
+                # base — настроенное значение: если пользователь его сменит,
+                # auto-tune начнётся заново (восстановление в async_start)
+                if hasattr(self.storage, "set_learn_rate_slow"):
+                    await self.storage.set_learn_rate_slow(
+                        self.entry.entry_id,
+                        float(
+                            self.opt(CONF_LEARN_RATE_SLOW) or DEFAULT_LEARN_RATE_SLOW
+                        ),
+                        self._learn_rate_slow,
+                    )
 
         # АКТИВНОЕ ОБУЧЕНИЕ ДЛЯ НАГРЕВА И ОСТЫВАНИЯ
         if enable_learning:
@@ -1119,9 +1256,15 @@ class SmartOffsetController:
                 elif offset < -2.0 and e >= -0.1:
                     adjustment = self._learn_rate_slow * min(0.5, abs(offset) * 0.1)
                 
-                # Ограничиваем коррекцию для плавности
-                adjustment = _clamp(adjustment, -0.3, 0.3)
+                # (ограничение скорости обучения перенесено ниже — теперь глобальное)
             
+            # Ограничение скорости обучения: не более max_offset_step за тик
+            # (раньше learn_rate_fast*|e| давал до ±2.5°C/тик и offset улетал в предел)
+            max_offset_step = float(
+                self.opt(CONF_MAX_OFFSET_STEP) or DEFAULT_MAX_OFFSET_STEP
+            )
+            adjustment = _clamp(adjustment, -max_offset_step, max_offset_step)
+
             if adjustment != 0.0:
                 new_offset = _clamp(offset + adjustment, MIN_OFFSET, MAX_OFFSET)
                 if abs(new_offset - offset) >= min_offset_change:
@@ -1142,40 +1285,29 @@ class SmartOffsetController:
         self.pid.kp = float(self.opt(CONF_PID_KP) or DEFAULT_PID_KP)
         self.pid.ki = float(self.opt(CONF_PID_KI) or DEFAULT_PID_KI)
         self.pid.kd = float(self.opt(CONF_PID_KD) or DEFAULT_PID_KD)
-        # correction (PID)
-        correction = self.pid.update(e, t_target, inp.now_mono, step_max)
+        # correction (PID): i_limit = step_max — защита от windup интеграла
+        correction = self.pid.update(
+            e, t_target, inp.now_mono, step_max, i_limit=step_max
+        )
 
-        # TTT soft landing (только при нагреве)
+        # МЯГКАЯ ПОСАДКА (только при нагреве): в полосе от deadband до
+        # deadband + ease_span плавно гасим коррекцию PID к полу 0.2,
+        # чтобы у границы мёртвой зоны уставка уже стояла у baseline
+        # и клапан закрывался до того, как инерция системы перегреет комнату.
+        #
+        # Прежние время-зависимые механизмы (TTT-фактор, overshoot-фактор и
+        # отсечка по heating_rate) были МЁРТВЫМ КОДОМ: их пороги срабатывания
+        # (e < 0.05..0.35 °C при реальных heating_rate 0.013..0.035 °C/мин)
+        # лежали НИЖЕ deadband, при котором active_control вообще не вызывается.
+        # Из-за этого система входила в мёртвую зону с полной коррекцией
+        # +step_max и перегревала по инерции (overshoot_count 19/19).
+        # Подробнее: plans/precision-improvements.md (P0-1).
         if e > 0:
-            predicted_minutes_ttt = e * self._minutes_per_degree
-            if predicted_minutes_ttt < self.ttt_soft_min:
-                factor = _clamp(predicted_minutes_ttt / self.ttt_soft_min, 0.3, 1.0)
-                correction *= factor
-
-        # overshoot prevention from heating_rate (только при нагреве)
-        if e > 0 and self._heating_rate > 0.001:
-            predicted_time = e / self._heating_rate  # minutes
-            if predicted_time < self.predict_minutes:
-                factor = max(0.5, 1.0 - (self.predict_minutes - predicted_time) / self.predict_minutes)
-                correction *= factor
+            ease_span = max(1.0, 2.0 * deadband)
+            if e < deadband + ease_span:
+                correction *= _clamp((e - deadband) / ease_span, 0.2, 1.0)
 
         t_trv = _round_step(t_target + offset + correction, step_min)
-
-        # Прогнозная отсечка перегрева (мягкая посадка): чем ближе к цели,
-        # тем ниже опускаем уставку, чтобы клапан закрылся заранее
-        # (инерция доведёт до цели без перегрева)
-        if e > 0 and self._heating_rate > 0.001:
-            predicted_time = e / self._heating_rate  # минут до цели
-            if predicted_time < self.ttt_soft_min:
-                frac = predicted_time / max(0.1, self.ttt_soft_min)  # 0..1
-                t_trv = _round_step(
-                    _clamp(
-                        t_target + offset - (1.0 - frac) * step_max,
-                        trv_min,
-                        trv_max,
-                    ),
-                    step_min,
-                )
 
         # stuck logic
         if stuck_enable and (not self.window_is_open) and (not self.boost_active):
@@ -1276,6 +1408,26 @@ class SmartOffsetController:
             e = inp.t_effective - inp.t_room
             self.last_error = round(e, 3)
 
+            # Верификация уставки: фактическое значение на TRV vs last_set.
+            # Раньше потерянная команда (Zigbee) навсегда блокировала переотправку.
+            self.trv_reported_setpoint = inp.trv_reported_setpoint
+            if (
+                inp.trv_reported_setpoint is not None
+                and self.last_set is not None
+                and abs(inp.trv_reported_setpoint - self.last_set) > 0.5
+            ):
+                LOGGER.warning(
+                    "TRV %s: уставка на устройстве %.1f ≠ last_set %.1f — переотправка",
+                    inp.climate_entity,
+                    inp.trv_reported_setpoint,
+                    self.last_set,
+                )
+                self.trv_setpoint_sync = "mismatch"
+                self.last_set = inp.trv_reported_setpoint
+                self._force_next_control = True
+            elif inp.trv_reported_setpoint is not None:
+                self.trv_setpoint_sync = "ok"
+
             # Valve exercise (обслуживание клапана)
             exercise_days = int(self.opt(CONF_VALVE_EXERCISE_DAYS) or 0)
             if exercise_days > 0:
@@ -1290,7 +1442,7 @@ class SmartOffsetController:
                         return
                     self._cancel_valve_exercise()
                     await self.storage.set_valve_exercise(
-                        self.entry.entry_id, inp.now_mono
+                        self.entry.entry_id, time.time()
                     )
                 elif (
                     inp.hvac_mode != HVACMode.OFF.value
@@ -1298,7 +1450,9 @@ class SmartOffsetController:
                     and not self.boost_active
                 ):
                     last_ex = self.storage.get_valve_exercise(self.entry.entry_id)
-                    if inp.now_mono - last_ex >= exercise_days * 86400:
+                    # epoch-время: монотонные часы обнулялись при рестарте HA,
+                    # и автопрокрутка откладывалась на новые exercise_days аптайма
+                    if time.time() - last_ex >= exercise_days * 86400:
                         await self._start_valve_exercise(inp)
                         self._prev_room_temp = inp.t_room
                         self._prev_time = now_mono
@@ -1307,12 +1461,11 @@ class SmartOffsetController:
 
             current_mode = inp.hvac_mode
             
-            # Обработка переходов режимов (только включение питания при переходе в HEAT)
-            if (self._prev_hvac_mode_config == HVACMode.OFF.value and 
+            # Обработка переходов режимов: открыть клапан при переходе в HEAT
+            if (self._prev_hvac_mode_config == HVACMode.OFF.value and
                 current_mode == HVACMode.HEAT.value):
-                if self._is_yandex_power_controlled(inp.climate_entity):
-                    await self._ensure_yandex_power(inp.climate_entity, "on")
-            
+                await self._set_valve_switch(True, force=True)
+
             self._prev_hvac_mode_config = current_mode
 
             if inp.hvac_mode == HVACMode.OFF.value:
