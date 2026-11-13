@@ -27,3 +27,12 @@ jobs:
           files: smart_thermostat.zip
           body_path: RELEASE_NOTES.md
           draft: false
+          # иначе при повторном пуше того же тега body остаётся от первого релиза
+          make_latest: true
+
+      - name: Force-update release notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          gh release edit "$tag" --notes-file RELEASE_NOTES.md --latest

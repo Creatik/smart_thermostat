@@ -1,0 +1,29 @@
+name: Sync release notes for latest tag
+
+# Чинит body, если softprops не перезаписал описание при re-tag.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "RELEASE_NOTES.md"
+      - ".github/workflows/sync-release-notes.yaml"
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Update GitHub release body from RELEASE_NOTES.md
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="$(git describe --tags --abbrev=0)"
+          echo "Syncing notes for $tag"
+          gh release edit "$tag" --notes-file RELEASE_NOTES.md --latest
