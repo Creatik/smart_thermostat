@@ -44,12 +44,26 @@ TRV/термостатом по **одному или нескольким ко�
 
 ## 📦 Установка
 
-### Через HACS (рекомендуется)
+### Marketplace (Home Assistant 2026.11+)
 
-1. HACS → **Integrations** → меню (⋮) → **Custom repositories**.
-2. Добавьте: `https://github.com/Creatik/smart_thermostat`
-3. Категория: **Integration**.
-4. Нажмите **Install** и перезапустите Home Assistant.
+С 2026.11 HACS встроен в HA как **Marketplace** (`Settings → Marketplace`).
+
+1. **Settings → Marketplace** → **Add from link** (справа сверху).
+2. Укажите репозиторий: `https://github.com/Creatik/smart_thermostat`
+   (или `Creatik/smart_thermostat`).
+3. При запросе подключите GitHub (нужно для custom repositories).
+4. Тип: **Integration**, если HA не определит сам → **Add**.
+5. Откройте карточку репозитория → **Download / Install**, затем
+   **перезапустите Home Assistant**.
+
+Обновления: Marketplace проверяет custom-репозитории roughly раз в 48 ч
+(при подключённом GitHub), либо обновите вручную на странице репозитория.
+
+### HACS (Home Assistant ≤ 2026.10)
+
+1. HACS → меню (⋮) → **Custom repositories**.
+2. URL: `https://github.com/Creatik/smart_thermostat`, тип **Integration** → **Add**.
+3. Найдите **Smart Thermostat** → **Download**, затем перезапустите Home Assistant.
 
 ### Вручную
 
