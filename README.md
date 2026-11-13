@@ -57,36 +57,32 @@ TRV/термостатом по **одному или нескольким ко�
 
 ## ⚙️ Настройка (UI)
 
-**Settings → Devices & Services → Add Integration → Smart Thermostat**
+**Быстрый старт (3 шага):**
 
-Обязательные поля:
-- **Термостат** (`climate_entity`) — один `climate.*`.
-- **Датчики температуры помещения** (`room_sensor_entities`) — один или несколько `sensor.*`.
-- **Целевая температура** (`room_target`) — в °C.
+1. **Settings → Devices & Services → Add Integration → Smart Thermostat**
+2. Выберите **термостат на радиаторе**, **датчики комнаты** и желаемую температуру.
+3. Готово — умная подстройка (offset, прогрев после эко, PID) работает на дефолтах.
 
-Опционально: датчики окна (`binary_sensor.*`).
+Опционально при установке: датчики окна.
 
 > Один и тот же `climate_entity` нельзя добавить дважды.
 
-### Параметры (Configure)
+### Configure — основные настройки
 
-- **Управление**: интервал, мёртвая зона, шаг `step_min/step_max`, пределы `trv_min/trv_max`, `cooldown`.
-- **Обучение**: `enable_learning`, `learn_rate_fast/slow`, `min_offset_change`,
-  `no_learn_summer`, `stable_learn_*`, `offset_decay_*`, `offset_learn_threshold`.
-- **Окна / Boost**: `window_sensor_entities`, `window_open_no_learn_min`, `boost_duration_sec`.
-- **Stuck**: `stuck_enable`, `stuck_seconds`, `stuck_min_drop`, `stuck_step`, `max_stuck_bias`.
-- **Динамика**: `heating_alpha`, `overshoot_threshold`, `predict_minutes`, `ttt_*`.
-- **Умные фичи**:
-  - `outdoor_sensor_entity` / `weather_entity` — источник наружной температуры;
-  - `weather_base_temp`, `weather_max_comp` — настройка погодной компенсации;
-  - `presence_entity` — датчики присутствия (Person / binary_sensor);
-  - `eco_enable`, `eco_offset` — эко-режим при отсутствии людей;
-  - `predictive_factor` — влияние холода на компенсацию;
-  - `pid_kp/ki/kd` — коэффициенты PID.
-- **Пресеты**: `preset_comfort_temp`, `preset_eco_temp`, `preset_away_temp`,
-  `preset_sleep_temp` — целевые температуры каждого пресета (в °C). Активный пресет
-  выбирается свойством `preset_mode` виртуального термостата (`none` — ручная уставка,
-  `comfort`, `eco`, `away`, `sleep`).
+Форма короткая и понятная:
+
+- переключатель клапана (если есть у TRV), окна, улица / погода;
+- «кто дома» + экономия без людей;
+- температуры режимов Комфорт / Эко / Вдали / Сон;
+- автоподстройка, форсаж, прокрутка клапана.
+
+Пресеты на виртуальном `climate.*`: `preset_mode` = `none` / `comfort` / `eco` / `away` / `sleep`.
+
+### Расширенные настройки
+
+Включите **«Показать расширенные настройки»** — откроется второй шаг с PID,
+скоростями обучения, stuck, TTT и т.д. Обычно менять не нужно: интеллект
+в контроллере и `DEFAULTS`, а не в десятках ручек.
 
 ---
 

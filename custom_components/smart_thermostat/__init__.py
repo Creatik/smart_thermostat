@@ -9,19 +9,22 @@ from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import HomeAssistantError
 
-from .const import DOMAIN, PLATFORMS, RUNTIME_OPTION_KEYS
+from .const import DOMAIN, PLATFORMS, RUNTIME_OPTION_KEYS, CONF_PRESENCE_ENTITY
 from .controller import SmartOffsetController
 from .storage import OffsetStorage
+from .helpers import normalize_entity_list as _normalize_entity_list
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS: list[Platform] = ["sensor", "button", "climate", "switch"]  # Убедитесь, что совпадает с const.py
+PLATFORMS: list[Platform] = ["sensor", "button", "climate", "switch", "time"]
 
 # ========== СЕРВИСЫ ==========
 SERVICE_RESET_OFFSET = "reset_offset"
 SERVICE_START_BOOST = "start_boost"
+SERVICE_CLEAR_ARRIVAL_HISTORY = "clear_arrival_history"
 
 SERVICE_RESET_OFFSET_SCHEMA = vol.Schema({vol.Required("entry_id"): str})
+SERVICE_CLEAR_ARRIVAL_HISTORY_SCHEMA = vol.Schema({vol.Required("entry_id"): str})
 SERVICE_START_BOOST_SCHEMA = vol.Schema(
     {
         vol.Required("entry_id"): str,
@@ -72,11 +75,26 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         _handle_reset_offset,
         schema=SERVICE_RESET_OFFSET_SCHEMA,
     )
+    async def _handle_clear_arrival_history(call: ServiceCall) -> None:
+        storage = hass.data.get(DOMAIN, {}).get("storage")
+        if storage is None:
+            raise HomeAssistantError(f"Хранилище {DOMAIN} не найдено")
+        await storage.clear_arrival_history(call.data["entry_id"])
+        _LOGGER.info(
+            "История приходов очищена для %s", call.data["entry_id"]
+        )
+
     hass.services.async_register(
         DOMAIN,
         SERVICE_START_BOOST,
         _handle_start_boost,
         schema=SERVICE_START_BOOST_SCHEMA,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_CLEAR_ARRIVAL_HISTORY,
+        _handle_clear_arrival_history,
+        schema=SERVICE_CLEAR_ARRIVAL_HISTORY_SCHEMA,
     )
     _LOGGER.debug("Сервисы %s зарегистрированы", DOMAIN)
 
@@ -95,6 +113,27 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         _LOGGER.debug("Создано и загружено глобальное хранилище")
     else:
         storage = hass.data[DOMAIN]["storage"]
+
+    # Авто-wipe истории приходов при смене presence (батл №2 / P3.1):
+    # мусор от motion-«presence» уводит медиану слота learned_preheat.
+    # Гвард: сравнение old/new сигнатуры, а не каждый reload.
+    try:
+        cur_presence = _normalize_entity_list(
+            entry.options.get(CONF_PRESENCE_ENTITY)
+            or entry.data.get(CONF_PRESENCE_ENTITY)
+        )
+        prev_presence = storage.get_last_presence(entry.entry_id)
+        if prev_presence is not None and prev_presence != cur_presence:
+            await storage.clear_arrival_history(entry.entry_id)
+            _LOGGER.warning(
+                "presence_entity изменился %s → %s: история приходов "
+                "очищена (мусор от старого источника)",
+                prev_presence,
+                cur_presence,
+            )
+        await storage.set_last_presence(entry.entry_id, cur_presence)
+    except Exception:
+        _LOGGER.exception("Авто-wipe arrivals: сбой (не блокирует setup)")
 
     # Создаём контроллер для этой записи
     controller = SmartOffsetController(hass, entry, storage)

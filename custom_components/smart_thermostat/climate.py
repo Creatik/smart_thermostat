@@ -30,6 +30,7 @@ from .const import (
 from .helpers import (
     normalize_entity_list as _normalize_entity_list,
     to_float as _to_float,
+    thermostat_device_label as _thermostat_device_label,
 )
 
 
@@ -57,7 +58,9 @@ class SmartThermostatVirtual(ClimateEntity):
     )
     _attr_hvac_modes = [HVACMode.HEAT, HVACMode.OFF]
     _attr_hvac_mode = HVACMode.HEAT
-    _attr_temperature_unit = UnitOfTemperature.CELSIUS
+    # HA 2024.11+: native_* (старые _attr_temperature_unit / current_temperature
+    # deprecated → удалят в 2027.11)
+    _attr_native_temperature_unit = UnitOfTemperature.CELSIUS
     _attr_target_temperature_step = 0.5
     _attr_icon = "mdi:thermostat"
     _attr_translation_key = "virtual_thermostat"
@@ -74,9 +77,15 @@ class SmartThermostatVirtual(ClimateEntity):
 
     @property
     def device_info(self) -> DeviceInfo:
+        climate = self.entry.data.get(CONF_CLIMATE)
+        friendly = None
+        if climate:
+            st = self.hass.states.get(climate)
+            if st is not None:
+                friendly = st.attributes.get("friendly_name")
         return DeviceInfo(
             identifiers={(DOMAIN, self.entry.entry_id)},
-            name="Smart Thermostat",
+            name=_thermostat_device_label(climate, friendly),
             manufacturer="Custom",
             model="Smart Thermostat",
         )
@@ -101,11 +110,11 @@ class SmartThermostatVirtual(ClimateEntity):
         return sum(temps) / len(temps)
 
     @property
-    def current_temperature(self) -> float | None:
+    def native_current_temperature(self) -> float | None:
         return self._get_room_temperature()
 
     @property
-    def target_temperature(self) -> float | None:
+    def native_target_temperature(self) -> float | None:
         try:
             return float(self.controller.active_target())
         except (ValueError, TypeError):
@@ -193,9 +202,9 @@ class SmartThermostatVirtual(ClimateEntity):
         if self.hvac_mode == HVACMode.OFF:
             return HVACAction.OFF
 
-        current_temp = self.current_temperature
-        target_temp = self.target_temperature
-        
+        current_temp = self.native_current_temperature
+        target_temp = self.native_target_temperature
+
         if current_temp is None or target_temp is None:
             return HVACAction.IDLE
         
@@ -222,6 +231,7 @@ class SmartThermostatVirtual(ClimateEntity):
             "last_action": getattr(self.controller, "last_action", ""),
             "last_error": getattr(self.controller, "last_error", None),
             "window_open": getattr(self.controller, "window_is_open", False),
+            "control_target": getattr(self.controller, "control_target", None),
             "boost_active": getattr(self.controller, "boost_active", False),
             # Диагностика контура управления
             "pid_i": getattr(getattr(self.controller, "pid", None), "i", None),

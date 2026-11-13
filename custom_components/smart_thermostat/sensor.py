@@ -8,7 +8,7 @@ import logging
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
-from homeassistant.helpers.entity import DeviceInfo
+from homeassistant.helpers.entity import DeviceInfo, EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.components.sensor import (
     SensorEntity,
@@ -22,7 +22,10 @@ from .const import (
     CONF_ROOM_TARGET,
     CONF_CLIMATE,
     CONF_ROOM_SENSORS,
+    CONF_DEADBAND,
+    DEFAULT_DEADBAND,
 )
+from .helpers import thermostat_device_label, predicted_minutes_to_target
 
 
 
@@ -41,6 +44,9 @@ class SensorDefinition:
     state_class: str | None = None
     options: Sequence[str] | None = None
     suggested_display_precision: int | None = None
+    # diagnostic → блок «Диагностика»; hide → не в UI активности
+    diagnostic: bool = False
+    hide_from_device: bool = False
 
 
 
@@ -62,10 +68,20 @@ ACTION_MAPPING = {
     "deadband_rebase": "rebase",
     "deadband_init": "init",
     "deadband_step_down": "step_down",
+    "overshoot_close": "overshoot_close",
+    "approach_close": "approach_close",
+    "offset_trim": "offset_trim",
     "stable_learn": "learn",
     "reset_offset": "reset",
     "window_open": "window",
     "boost": "boost",
+    "schedule_boost": "schedule_boost",
+    "target_step_warmup": "warmup",
+    "arrival_warmup": "arrival_warmup",
+    "heat_source_absent": "heat_source_absent",
+    "cold_start_jerk": "cold_start",
+    "cold_start_handoff": "cold_start",
+    "learn_freeze": "learn_freeze",
     "hold": "hold",
     "heating": "heating",
     "idle": "idle",
@@ -95,86 +111,101 @@ LAST_ACTION_OPTIONS = sorted(set(ACTION_MAPPING.values()) | {"unknown", "no_sens
 
 
 
+# UI: в «Активности» оставляем понятное пользователю.
+# Диагностика / скрытое — внутренности контура (offset, rate, дубли).
 SENSORS = (
     SensorDefinition(
         key="error",
         unit=UnitOfTemperature.CELSIUS,
         device_class=SensorDeviceClass.TEMPERATURE,
         state_class=SensorStateClass.MEASUREMENT,
-        suggested_display_precision=3
+        suggested_display_precision=3,
     ),
     SensorDefinition(
         key="offset",
         unit=UnitOfTemperature.CELSIUS,
         device_class=SensorDeviceClass.TEMPERATURE,
         state_class=SensorStateClass.MEASUREMENT,
-        suggested_display_precision=3
+        suggested_display_precision=3,
+        diagnostic=True,
     ),
     SensorDefinition(
         key="target_trv",
         unit=UnitOfTemperature.CELSIUS,
         device_class=SensorDeviceClass.TEMPERATURE,
         state_class=SensorStateClass.MEASUREMENT,
-        suggested_display_precision=2
+        suggested_display_precision=2,
     ),
     SensorDefinition(
         key="last_set",
         unit=UnitOfTemperature.CELSIUS,
         device_class=SensorDeviceClass.TEMPERATURE,
         state_class=SensorStateClass.MEASUREMENT,
-        suggested_display_precision=2
+        suggested_display_precision=2,
+        diagnostic=True,
     ),
-    SensorDefinition(key="last_action"),
+    SensorDefinition(key="last_action", hide_from_device=True, diagnostic=True),
     SensorDefinition(
         key="last_action_text",
         device_class=SensorDeviceClass.ENUM,
-        options=LAST_ACTION_OPTIONS
+        options=LAST_ACTION_OPTIONS,
     ),
     SensorDefinition(
         key="change_count",
         state_class=SensorStateClass.TOTAL_INCREASING,
-        suggested_display_precision=0
+        suggested_display_precision=0,
+        diagnostic=True,
     ),
     SensorDefinition(
         key="window_state",
         device_class=SensorDeviceClass.ENUM,
-        options=["open", "closed"]
+        options=["open", "closed"],
     ),
     SensorDefinition(
         key="boost_remaining",
         unit=UnitOfTime.SECONDS,
         device_class=SensorDeviceClass.DURATION,
-        state_class=SensorStateClass.MEASUREMENT
+        state_class=SensorStateClass.MEASUREMENT,
+        diagnostic=True,
     ),
     SensorDefinition(
         key="boost_active",
         device_class=SensorDeviceClass.ENUM,
-        options=["on", "off"]
+        options=["on", "off"],
+        diagnostic=True,  # дубль switch.*_boost
     ),
     SensorDefinition(
         key="control_paused",
         device_class=SensorDeviceClass.ENUM,
-        options=["on", "off"]
+        options=["on", "off"],
+        diagnostic=True,
+    ),
+    SensorDefinition(
+        key="heat_delivery",
+        device_class=SensorDeviceClass.ENUM,
+        options=["flowing", "absent", "unknown"],
+        diagnostic=True,
     ),
     SensorDefinition(
         key="heating_rate",
-        unit="°C/min",  # строка
+        unit="°C/min",
         state_class=SensorStateClass.MEASUREMENT,
-        suggested_display_precision=3
+        suggested_display_precision=3,
+        diagnostic=True,
     ),
     SensorDefinition(
         key="predicted_time",
-        unit="min",  # строка — решает проблему
+        unit="min",
         device_class=SensorDeviceClass.DURATION,
         state_class=SensorStateClass.MEASUREMENT,
-        suggested_display_precision=1
+        suggested_display_precision=1,
     ),
     SensorDefinition(
         key="device_temperature",
         unit=UnitOfTemperature.CELSIUS,
         device_class=SensorDeviceClass.TEMPERATURE,
         state_class=SensorStateClass.MEASUREMENT,
-        suggested_display_precision=1
+        suggested_display_precision=1,
     ),
 )
 
@@ -229,6 +260,11 @@ class SmartOffsetDebugSensor(SensorEntity):
             self._attr_suggested_display_precision = definition.suggested_display_precision
         if definition.options:
             self._attr_options = list(definition.options)
+        if definition.diagnostic or definition.hide_from_device:
+            self._attr_entity_category = EntityCategory.DIAGNOSTIC
+        if definition.hide_from_device:
+            # Полностью убрать из карточки устройства (остаётся в registry)
+            self._attr_entity_registry_visible_default = False
         
         self._unsub: Optional[Callable[[], None]] = None
 
@@ -236,9 +272,15 @@ class SmartOffsetDebugSensor(SensorEntity):
     @property
     def device_info(self) -> DeviceInfo:
         """Информация об устройстве."""
+        climate = self.entry.data.get(CONF_CLIMATE)
+        friendly = None
+        if climate:
+            st = self.hass.states.get(climate)
+            if st is not None:
+                friendly = st.attributes.get("friendly_name")
         return DeviceInfo(
             identifiers={(DOMAIN, self.entry.entry_id)},
-            name="Smart Thermostat",
+            name=thermostat_device_label(climate, friendly),
             manufacturer="Custom",
             model="Smart Thermostat",
         )
@@ -354,6 +396,10 @@ class SmartOffsetDebugSensor(SensorEntity):
                 paused = wo or (ba and self.hass.loop.time() < until)
                 return "on" if paused else "off"
             
+            # Обработка heat_delivery сенсора (диагностика источника тепла)
+            elif k == "heat_delivery":
+                return str(getattr(self.controller, "heat_delivery", "unknown"))
+            
             # Обработка heating_rate сенсора
             elif k == "heating_rate":
                 rate = getattr(self.controller, "_heating_rate", 0.1)
@@ -361,14 +407,17 @@ class SmartOffsetDebugSensor(SensorEntity):
             
             # Обработка predicted_time сенсора
             elif k == "predicted_time":
-                heating_rate = getattr(self.controller, "_heating_rate", 0.1)
-                error = self.controller.last_error
-                
-                if heating_rate > 0.001 and error is not None and error > 0:
-                    # Рассчитываем время в минутах
-                    time_minutes = error / heating_rate
-                    return round(time_minutes, 1)
-                return None
+                deadband = float(
+                    self.controller.opt(CONF_DEADBAND) or DEFAULT_DEADBAND
+                )
+                return predicted_minutes_to_target(
+                    self.controller.last_error,
+                    minutes_per_degree=getattr(
+                        self.controller, "_minutes_per_degree", None
+                    ),
+                    heating_rate=getattr(self.controller, "_heating_rate", None),
+                    deadband=deadband,
+                )
             
             # Обработка learn_rate_current сенсора (если добавлен)
             elif k == "learn_rate_current":

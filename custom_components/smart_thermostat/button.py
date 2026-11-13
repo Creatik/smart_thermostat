@@ -10,7 +10,8 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.entity import DeviceInfo
 
-from .const import DOMAIN
+from .const import DOMAIN, CONF_CLIMATE
+from .helpers import thermostat_device_label
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -50,9 +51,15 @@ class SmartOffsetBaseButton(ButtonEntity):
         self.hass = hass
         self.entry = entry
         self.controller = controller
+        climate = entry.data.get(CONF_CLIMATE)
+        friendly = None
+        if climate:
+            st = hass.states.get(climate)
+            if st is not None:
+                friendly = st.attributes.get("friendly_name")
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, entry.entry_id)},
-            name="Smart Thermostat",
+            name=thermostat_device_label(climate, friendly),
             manufacturer="Custom",
             model="Smart Thermostat",
         )

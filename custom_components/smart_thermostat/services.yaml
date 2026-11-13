@@ -32,3 +32,17 @@ start_boost:
           max: 3600
           step: 30
           unit_of_measurement: "s"
+clear_arrival_history:
+  name: Очистить историю приходов
+  description: >-
+    Стереть выученную историю приходов (arrival_history). Нужна при смене
+    источника присутствия: мусорные фронты от motion-датчика уводят
+    медиану слота и ломают предпрогрев к приходу.
+  fields:
+    entry_id:
+      name: ID записи
+      description: ID конфигурационной записи интеграции smart_thermostat.
+      required: true
+      example: "01JXXXXXXX"
+      selector:
+        text:

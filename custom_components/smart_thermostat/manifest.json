@@ -1,15 +1,21 @@
 {
   "domain": "smart_thermostat",
   "name": "Smart Thermostat",
-  "after_dependencies": ["recorder"],
-  "codeowners": ["@annexhack"],
+  "after_dependencies": [
+    "recorder"
+  ],
+  "codeowners": [
+    "@annexhack"
+  ],
   "config_flow": true,
   "dependencies": [],
   "documentation": "https://github.com/Creatik/smart_thermostat/",
   "integration_type": "hub",
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/Creatik/smart_thermostat/issues",
-  "loggers": ["custom_components.smart_thermostat"],
+  "loggers": [
+    "custom_components.smart_thermostat"
+  ],
   "requirements": [],
-  "version": "2.2.2"
+  "version": "2.3.0"
 }

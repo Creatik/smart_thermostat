@@ -5,7 +5,12 @@ import time
 from typing import Any, Dict, List, Optional
 from datetime import datetime, timedelta
 
-from .const import MIN_OFFSET, MAX_OFFSET
+from .const import (
+    LEARNED_ARRIVAL_MAX_DAYS,
+    LEARNED_ARRIVAL_MAX_ENTRIES,
+    MIN_OFFSET,
+    MAX_OFFSET,
+)
 
 
 _STORAGE_VERSION = 1
@@ -114,6 +119,60 @@ class OffsetStorage:
         except (ValueError, TypeError):
             return 0.0
 
+    def get_window_offset_regime(self, entry_id: str) -> str:
+        """Какой offset сейчас живой: open (окно) или closed."""
+        raw = self._data.get(entry_id, {}).get("window_offset_regime")
+        return raw if raw in ("open", "closed") else "closed"
+
+    def get_parked_offset(self, entry_id: str, key: str) -> Optional[float]:
+        """Смещение другого режима окна. None — этот режим ещё не учили."""
+        if key not in ("offset_open", "offset_closed"):
+            return None
+        entry = self._data.get(entry_id, {})
+        if key not in entry:
+            return None
+        try:
+            return float(entry[key])
+        except (TypeError, ValueError):
+            return None
+
+    async def commit_window_regime(
+        self,
+        entry_id: str,
+        *,
+        regime: str,
+        live: float,
+        parked_key: str,
+        parked_value: float,
+        reason: str,
+    ) -> None:
+        """Атомарно: живой offset + припаркованный режим окна.
+
+        Иначе обрыв между двумя записями оставляет regime=open
+        при смещении закрытого окна.
+        """
+        if regime not in ("open", "closed"):
+            return
+        if parked_key not in ("offset_open", "offset_closed"):
+            return
+        live_c = max(MIN_OFFSET, min(MAX_OFFSET, float(live)))
+        parked_c = max(MIN_OFFSET, min(MAX_OFFSET, float(parked_value)))
+        async with self._lock:
+            entry_data = self._data.setdefault(entry_id, {})
+            try:
+                old_offset = float(entry_data.get("offset", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                old_offset = 0.0
+            entry_data[parked_key] = parked_c
+            entry_data["window_offset_regime"] = regime
+            if abs(old_offset - live_c) >= 0.01:
+                entry_data["offset"] = live_c
+                entry_data["last_offset_change"] = self.hass.loop.time()
+                entry_data["last_offset_value"] = old_offset
+                self._add_offset_history(entry_id, live_c, reason)
+                self._increment_offset_changes(entry_id)
+        await self.async_save()
+
     async def set_offset(self, entry_id: str, offset: float, reason: str = "") -> None:
         """Установить смещение и сохранить время изменения.
 
@@ -161,41 +220,55 @@ class OffsetStorage:
         }
 
     def get_history(self, entry_id: str) -> List[Dict[str, Any]]:
-        """Получить историю для данного entry."""
+        """Получить историю тиков контроллера (epoch wall time)."""
         history_key = f"history_{entry_id}"
         history = self._data.get(history_key, [])
-        
-        # Очистка устаревших записей
+        return self._trim_tick_history(list(history))
+
+    def _trim_tick_history(self, history: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         cutoff_time = time.time() - (_MAX_HISTORY_DAYS * 24 * 3600)
-        cleaned_history = [
-            entry for entry in history 
-            if entry.get('time', 0) >= cutoff_time
+        cleaned = [
+            entry
+            for entry in history
+            if float(entry.get("time", 0) or 0) >= cutoff_time
         ]
-        
-        # Ограничение по количеству записей
-        if len(cleaned_history) > _MAX_HISTORY_ENTRIES:
-            cleaned_history = cleaned_history[-_MAX_HISTORY_ENTRIES:]
-        
-        return cleaned_history
+        if len(cleaned) > _MAX_HISTORY_ENTRIES:
+            cleaned = cleaned[-_MAX_HISTORY_ENTRIES:]
+        return cleaned
+
+    async def append_tick(
+        self,
+        entry_id: str,
+        *,
+        error: Optional[float],
+        offset: float,
+        trv_set: Optional[float],
+        action: str,
+    ) -> None:
+        """Добавить тик контроллера. time = epoch (не mono) — иначе CSV «1970».
+
+        Раньше set_history никто не вызывал → controller_ticks пустые месяцами.
+        """
+        history_key = f"history_{entry_id}"
+        async with self._lock:
+            history = list(self._data.get(history_key, []))
+            history.append(
+                {
+                    "time": time.time(),
+                    "error": None if error is None else round(float(error), 3),
+                    "offset": round(float(offset), 3),
+                    "trv_set": None if trv_set is None else round(float(trv_set), 2),
+                    "action": str(action or ""),
+                }
+            )
+            self._data[history_key] = self._trim_tick_history(history)
+        await self.async_save()
 
     async def set_history(self, entry_id: str, history: List[Dict[str, Any]]) -> None:
-        """Сохранить историю."""
+        """Заменить историю тиков целиком (редко нужно)."""
         history_key = f"history_{entry_id}"
-        
         async with self._lock:
-            # Очистка устаревших записей перед сохранением
-            cutoff_time = time.time() - (_MAX_HISTORY_DAYS * 24 * 3600)
-            cleaned_history = [
-                entry for entry in history 
-                if entry.get('time', 0) >= cutoff_time
-            ]
-            
-            # Ограничение по количеству записей
-            if len(cleaned_history) > _MAX_HISTORY_ENTRIES:
-                cleaned_history = cleaned_history[-_MAX_HISTORY_ENTRIES:]
-            
-            self._data[history_key] = cleaned_history
-        
+            self._data[history_key] = self._trim_tick_history(list(history))
         await self.async_save()
 
     def _increment_offset_changes(self, entry_id: str):
@@ -248,21 +321,100 @@ class OffsetStorage:
         return entry_data.get("heating_rate_history", [])
 
     def _add_heating_rate_history(self, entry_id: str, rate: float, reason: str = ""):
-        """Добавить запись в историю изменений скорости нагрева."""
+        """Добавить запись в историю изменений скорости нагрева.
+
+        timestamp всегда epoch wall time. Старые записи с mono (~1e5–1e7)
+        отфильтровываются при cleanup (выглядят как 1970 в экспорте).
+        """
         entry_data = self._data.setdefault(entry_id, {})
         history = entry_data.get("heating_rate_history", [])
-        
+
         history.append({
             "timestamp": time.time(),
             "rate": float(rate),
-            "reason": reason
+            "reason": reason,
         })
-        
-        # Храним только последние 50 изменений
+
         if len(history) > 50:
             history = history[-50:]
-        
+
         entry_data["heating_rate_history"] = history
+
+    @staticmethod
+    def _is_plausible_epoch(ts: float) -> bool:
+        """Отсечь mono/мусор: валидный epoch примерно 2020–2100."""
+        return 1_577_836_800.0 <= float(ts) <= 4_102_444_800.0
+
+    # ========== ИСТОРИЯ ПРИХОДОВ (выученный график) ==========
+
+    def get_arrival_history(self, entry_id: str) -> List[Dict[str, Any]]:
+        """Приходы домой для предпрогрева: weekday, minutes, slot, timestamp."""
+        entry_data = self._data.get(entry_id, {})
+        hist = entry_data.get("arrival_history", [])
+        return list(hist) if isinstance(hist, list) else []
+
+    async def clear_arrival_history(self, entry_id: str) -> None:
+        """Стереть историю приходов (миграция presence, мусор от motion).
+
+        Батл №2 / P3.1: motion в presence даёт мусорные фронты — медиана
+        слота уводит learned_preheat. Чистка руками в .storage при живом
+        core — антипаттерн, поэтому сервис + авто-wipe при смене presence.
+        """
+        async with self._lock:
+            self._data.setdefault(entry_id, {}).pop("arrival_history", None)
+        await self.async_save()
+
+    def get_last_presence(self, entry_id: str) -> Optional[List[str]]:
+        """Сигнатура presence последнего запуска (для авто-wipe arrivals)."""
+        val = self._data.get(entry_id, {}).get("last_presence")
+        return list(val) if isinstance(val, list) else None
+
+    async def set_last_presence(self, entry_id: str, entities: List[str]) -> None:
+        """Запомнить текущую сигнатуру presence (auto-wipe-гвард)."""
+        async with self._lock:
+            self._data.setdefault(entry_id, {})["last_presence"] = list(entities)
+        await self.async_save()
+
+    async def append_arrival(
+        self,
+        entry_id: str,
+        *,
+        weekday: int,
+        minutes: int,
+        slot: str,
+        timestamp: Optional[float] = None,
+    ) -> None:
+        """Записать факт прихода (person/активность False→True)."""
+        ts = float(timestamp if timestamp is not None else time.time())
+        async with self._lock:
+            entry_data = self._data.setdefault(entry_id, {})
+            history = list(entry_data.get("arrival_history", []))
+            history.append(
+                {
+                    "timestamp": ts,
+                    "weekday": int(weekday),
+                    "minutes": int(minutes),
+                    "slot": str(slot),
+                }
+            )
+            entry_data["arrival_history"] = self._trim_arrival_history(history)
+        await self.async_save()
+
+    def _trim_arrival_history(
+        self, history: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        cutoff = time.time() - (LEARNED_ARRIVAL_MAX_DAYS * 24 * 3600)
+        cleaned = [
+            h
+            for h in history
+            if isinstance(h, dict)
+            and self._is_plausible_epoch(h.get("timestamp", 0))
+            and float(h.get("timestamp", 0)) >= cutoff
+            and h.get("slot") in ("morning", "evening")
+        ]
+        if len(cleaned) > LEARNED_ARRIVAL_MAX_ENTRIES:
+            cleaned = cleaned[-LEARNED_ARRIVAL_MAX_ENTRIES:]
+        return cleaned
 
     # ========== МЕТОДЫ ДЛЯ OVERSHOOT_COUNT ==========
 
@@ -358,10 +510,15 @@ class OffsetStorage:
                 cleaned = cleaned[-100:]
             entry_data["offset_history"] = cleaned
         
-        # Очистка heating_rate_history
+        # Очистка heating_rate_history (+ выкинуть mono «1970»)
         if "heating_rate_history" in entry_data:
             history = entry_data["heating_rate_history"]
-            cleaned = [h for h in history if h.get("timestamp", 0) >= cutoff_time]
+            cleaned = [
+                h
+                for h in history
+                if self._is_plausible_epoch(h.get("timestamp", 0))
+                and float(h.get("timestamp", 0)) >= cutoff_time
+            ]
             if len(cleaned) > 50:
                 cleaned = cleaned[-50:]
             entry_data["heating_rate_history"] = cleaned
@@ -373,6 +530,12 @@ class OffsetStorage:
             if len(cleaned) > 50:
                 cleaned = cleaned[-50:]
             entry_data["overshoot_history"] = cleaned
+
+        # Приходы: длиннее окно (график), отдельный trim
+        if "arrival_history" in entry_data:
+            entry_data["arrival_history"] = self._trim_arrival_history(
+                list(entry_data.get("arrival_history", []))
+            )
 
     def get_all_entries(self) -> List[str]:
         """Получить список всех entry_id."""

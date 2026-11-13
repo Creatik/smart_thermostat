@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.0] - 2026-11-03
+
+### Added
+- Гвард «клапан без власти» (valve authority): обучение offset не гонит его
+  к ±6, когда клапан уже полностью открыт и тепло не течёт (детская 02.11:
+  1.8→+6 за час при мёртвой комнате), и не хоронит к −6 на эко-«перегреве»
+  при закрытом клапане. `helpers.valve_learning_blocked` +
+  `helpers.valve_ref_setpoint`, константа `VALVE_TRAVEL_MARGIN`.
+- Сенсор диагностики `heat_delivery` (flowing/absent/unknown): честный ответ
+  «почему не греется» — контур vs котёл/циркуляция. Гварды анти-ложных:
+  boost, разгон local, grace 15 мин после скачка цели. `last_action =
+  heat_source_absent` + warning не чаще раза в час.
+- Сервис `clear_arrival_history` + авто-wipe истории приходов при смене
+  `presence_entity` (миграция с motion на person.*: мусорные фронты
+  уводят медиану слота learned_preheat).
+
+### Fixed
+- Детект скачка расписания по сырой цели (`t_target`), не `t_effective`:
+  эко/погода давали ложные ±3°C, спам boost и сброс learn_freeze.
+- `arrival_warmup` спам по motion кухни (9 раз/сутки): кулдаун 1 ч +
+  boost только при реальном недогреве.
+
+### Changed
+- Обучение: `learn_rate_slow` восстановление, выход из насыщения
+  (deep_against), pending-аккумулятор дробных поправок.
+- Тесты: 103+ юнит-тестов (`tests/`), включая valve authority и
+  heat_delivery от фактов дампов.
+
 ## [2.2.2] - 2026-10-13
 
 ### Added
