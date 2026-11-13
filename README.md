@@ -1,7 +1,7 @@
 <!-- markdownlint-disable MD041 -->
-<img src="https://img.shields.io/badge/HACS-Custom-orange.svg">
-<img src="https://img.shields.io/github/v/release/Creatik/smart_thermostat">
-<img src="https://img.shields.io/github/license/Creatik/smart_thermostat">
+[![HACS Custom](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
+[![Release](https://img.shields.io/github/v/release/Creatik/smart_thermostat)](https://github.com/Creatik/smart_thermostat/releases/latest)
+[![License: MIT](https://img.shields.io/github/license/Creatik/smart_thermostat)](LICENSE)
 
 # Smart Thermostat — Home Assistant
 
@@ -22,20 +22,23 @@ TRV/термостатом по **одному или нескольким ко�
 ## ✨ Возможности
 
 - **Автообучение offset** — адаптивная компенсация тепловой инерции и неточности датчика:
-  - активное обучение + «stable learning»;
+  - активное обучение + «stable learning» + soft-landing (`approach_trim`);
+  - **valve authority** — не гонит offset к ±6, когда клапан уже на упоре и тепла нет;
   - затухание смещения со временем (`offset_decay_rate/threshold`);
   - TTT (time-to-target) мягкая посадка и оценка скорости нагрева.
+- **Диагностика `heat_delivery`** — flowing / absent / unknown: контур vs котёл/циркуляция.
 - **Погодная компенсация** — при похолодании автоматически агрессивнее греет:
   источник — датчик наружной температуры / `weather.*` / прогноз.
 - **Эко-режим по присутствию** — если никого нет дома, уставка снижается на `eco_offset`.
 - **Пресеты** — быстрый выбор целевой температуры: **Comfort / Eco / Away / Sleep**
   (переключаются через `preset_mode` виртуального термостата, каждая со своей уставкой).
+- **Расписание comfort/sleep** — time-сущности на устройстве комнаты.
 - **PID-регулирование** — `pid_kp/ki/kd` с анти-виндиапом вместо простого P-контроля.
 - **Окна** — при открытом окне уставка → `trv_min`, обучение приостанавливается.
-- **Boost** — временный форсированный нагрев до `trv_max`.
+- **Boost** — временный форсированный нагрев до `trv_max` (в т.ч. cold-start после эко).
 - **Anti-stuck** — детектор «перегрето и не остывает».
 - **Виртуальный термостат** — полноценная `climate.*` сущность для дашбордов и HomeKit.
-- **Всё настраивается через UI**, без YAML.
+- **Всё настраивается через UI**, без YAML (короткая форма + advanced).
 
 ---
 
@@ -91,9 +94,10 @@ TRV/термостатом по **одному или нескольким ко�
 - **climate.*** — виртуальный термостат.
 - **button.*** — сброс накопленного offset.
 - **switch.*** — Boost вкл/выкл.
+- **time.*** — слоты расписания комфорт / сон.
 - **sensor.*** — отладка: `error`, `offset`, `target_trv`, `last_set`, `last_action(_text)`,
   `change_count`, `window_state`, `boost_*`, `control_paused`, `heating_rate`, `predicted_time`,
-  `device_temperature`.
+  `device_temperature`, `heat_delivery`.
 
 ---
 
@@ -103,6 +107,7 @@ TRV/термостатом по **одному или нескольким ко�
 |---|---|
 | `smart_thermostat.reset_offset` | Сброс накопленного смещения (`entry_id`). |
 | `smart_thermostat.start_boost` | Включить Boost на `duration` сек (опционально). |
+| `smart_thermostat.clear_arrival_history` | Очистить историю приходов (для learned preheat). |
 
 ---
 
@@ -111,18 +116,20 @@ TRV/термостатом по **одному или нескольким ко�
 ```
 custom_components/smart_thermostat/
 ├── __init__.py     # настройка/выгрузка записи + сервисы
-├── config_flow.py  # UI-конфигурация
+├── config_flow.py  # UI-конфигурация (simple + advanced)
 ├── const.py        # константы и дефолты
 ├── controller.py   # оркестратор (тик, режимы, обучение)
-├── helpers.py      # чистые хелперы
-├── inputs.py       # датаклacc входных данных
+├── helpers.py      # чистые хелперы (valve authority, heat delivery, …)
+├── inputs.py       # датакласс входных данных
 ├── pid.py          # PIDController
 ├── feedforward.py  # эко/погодная компенсация
-├── sensor.py / climate.py / button.py / switch.py
-└── storage.py      # хранение offset/истории
+├── sensor.py / climate.py / button.py / switch.py / time.py
+├── storage.py      # хранение offset/истории
+└── plans/          # разборы и планы улучшений
 ```
 
 Запуск проверок: `hassfest` и `hacs/action` через `.github/workflows/`.
+Юнит-тесты: `python -m pytest tests/`.
 
 ---
 
