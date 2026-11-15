@@ -9,9 +9,8 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.components.switch import SwitchEntity
-from homeassistant.helpers.event import async_track_state_change_event
 
-from .const import DOMAIN, SIGNAL_UPDATE, CONF_CLIMATE, SCHEDULE_ROOM_PREFIX
+from .const import DOMAIN, SIGNAL_UPDATE, CONF_CLIMATE
 from .helpers import thermostat_device_label
 
 _LOGGER = logging.getLogger(__name__)
@@ -34,13 +33,12 @@ def _device_info(hass: HomeAssistant, entry: ConfigEntry) -> DeviceInfo:
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback):
     controller = hass.data[DOMAIN][entry.entry_id]
-    entities: list[SwitchEntity] = [SmartOffsetBoostSwitch(hass, entry, controller)]
-    prefix = SCHEDULE_ROOM_PREFIX.get(entry.data.get(CONF_CLIMATE) or "")
-    if prefix:
-        entities.append(
-            ScheduleEnableSwitch(hass, entry, f"input_boolean.{prefix}_schedule")
-        )
+    entities: list[SwitchEntity] = [
+        SmartOffsetBoostSwitch(hass, entry, controller),
+        ScheduleEnableSwitch(hass, entry, controller),
+    ]
     async_add_entities(entities)
+
 
 class SmartOffsetBoostSwitch(SwitchEntity):
     _attr_has_entity_name = True
@@ -90,18 +88,20 @@ class SmartOffsetBoostSwitch(SwitchEntity):
 
 
 class ScheduleEnableSwitch(SwitchEntity):
-    """Ручное включение часов этой комнаты. Пока выключен, цель не трогаем."""
+    """Включение часов этой комнаты. Пока выкл — цель не трогаем."""
 
     _attr_has_entity_name = True
     _attr_should_poll = False
     _attr_translation_key = "sched_enabled"
     _attr_icon = "mdi:calendar-clock"
 
-    def __init__(self, hass: HomeAssistant, entry: ConfigEntry, helper: str) -> None:
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry, controller) -> None:
         self.hass = hass
         self.entry = entry
-        self._helper = helper
+        self.controller = controller
+        self._storage = controller.storage
         self._attr_unique_id = f"{entry.entry_id}_sched_enabled"
+        self._unsub: Optional[Callable[[], None]] = None
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -109,32 +109,30 @@ class ScheduleEnableSwitch(SwitchEntity):
 
     @property
     def is_on(self) -> bool:
-        return self.hass.states.is_state(self._helper, "on")
+        return bool(self._storage.get_schedule(self.entry.entry_id).get("enabled"))
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
-        self.async_on_remove(
-            async_track_state_change_event(self.hass, [self._helper], self._on_helper)
+
+        @callback
+        def _update():
+            self.async_write_ha_state()
+
+        self._unsub = async_dispatcher_connect(
+            self.hass, f"{SIGNAL_UPDATE}_{self.entry.entry_id}", _update
         )
 
-    @callback
-    def _on_helper(self, _event) -> None:
-        self.async_write_ha_state()
-
-    async def _set(self, on: bool) -> None:
-        if self.hass.states.get(self._helper) is None:
-            _LOGGER.warning("Нет %s — расписание некуда включить", self._helper)
-            return
-        await self.hass.services.async_call(
-            "input_boolean",
-            "turn_on" if on else "turn_off",
-            {"entity_id": self._helper},
-            blocking=True,
-        )
-        self.async_write_ha_state()
+    async def async_will_remove_from_hass(self) -> None:
+        if self._unsub:
+            self._unsub()
+            self._unsub = None
 
     async def async_turn_on(self, **kwargs: Any) -> None:
-        await self._set(True)
+        await self._storage.set_schedule(self.entry.entry_id, enabled=True)
+        self.async_write_ha_state()
+        await self.controller.trigger_once(force=True)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
-        await self._set(False)
+        await self._storage.set_schedule(self.entry.entry_id, enabled=False)
+        self.async_write_ha_state()
+        await self.controller.trigger_once(force=True)

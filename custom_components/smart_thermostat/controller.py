@@ -333,7 +333,8 @@ class SmartOffsetController:
         self._schedule_unsub = async_track_time_interval(
             self.hass, self._schedule_poll, timedelta(seconds=SCHEDULE_POLL_SEC)
         )
-        self._ensure_schedule_helper_listeners()
+        await self._migrate_schedule_from_legacy_helpers()
+        self._ensure_schedule_listeners()
         
         # ЗАТЕМ делаем один немедленный тик для быстрой инициализации
         await self._tick(None)
@@ -693,50 +694,70 @@ class SmartOffsetController:
         self._notify()
 
     # -------------------------
-    # встроенное расписание (вместо HA automation)
+    # встроенное расписание (storage на entry_id, без entity_id семьи)
     # -------------------------
-    def _schedule_prefix(self) -> Optional[str]:
-        climate = self.entry.data.get(CONF_CLIMATE) or ""
-        return SCHEDULE_ROOM_PREFIX.get(str(climate))
+    def _schedule_cfg(self) -> dict:
+        return self.storage.get_schedule(self.entry.entry_id)
 
     def _schedule_enabled(self) -> bool:
-        prefix = self._schedule_prefix()
-        if not prefix:
-            return False
-        return self.hass.states.is_state(f"input_boolean.{prefix}_schedule", "on")
+        return bool(self._schedule_cfg().get("enabled"))
 
-    def _schedule_helper_time(self, suffix: str, fallback: str) -> str:
-        prefix = self._schedule_prefix()
-        if not prefix:
-            return _parse_schedule_hhmm(None, fallback)
-        st = self.hass.states.get(f"input_datetime.{prefix}_{suffix}")
-        raw = st.state if st is not None else None
+    def _schedule_slot_hm(self, slot: str, fallback: str) -> str:
+        raw = self._schedule_cfg().get(slot)
         return _parse_schedule_hhmm(raw if isinstance(raw, str) else None, fallback)
 
-    def _ensure_schedule_helper_listeners(self) -> None:
-        prefix = self._schedule_prefix()
+    async def _migrate_schedule_from_legacy_helpers(self) -> None:
+        """Один раз перенести старые input_* (если были) в storage."""
+        if self.storage.has_schedule_config(self.entry.entry_id):
+            return
+        climate = self.entry.data.get(CONF_CLIMATE) or ""
+        prefix = SCHEDULE_HELPER_PREFIX_LEGACY.get(str(climate))
         if not prefix:
             return
-        entities = [
-            f"input_boolean.{prefix}_schedule",
-            f"input_datetime.{prefix}_comfort",
-            f"input_datetime.{prefix}_sleep",
-        ]
-        persons = _normalize_entity_list(self.opt(CONF_PRESENCE_ENTITY))
-        entities.extend(persons)
+        bool_ent = f"input_boolean.{prefix}_schedule"
+        comfort_ent = f"input_datetime.{prefix}_comfort"
+        sleep_ent = f"input_datetime.{prefix}_sleep"
+        if (
+            self.hass.states.get(bool_ent) is None
+            and self.hass.states.get(comfort_ent) is None
+            and self.hass.states.get(sleep_ent) is None
+        ):
+            return
+        comfort_st = self.hass.states.get(comfort_ent)
+        sleep_st = self.hass.states.get(sleep_ent)
+        await self.storage.set_schedule(
+            self.entry.entry_id,
+            enabled=self.hass.states.is_state(bool_ent, "on"),
+            comfort=_parse_schedule_hhmm(
+                comfort_st.state if comfort_st else None, SCHEDULE_DEFAULT_COMFORT
+            ),
+            sleep=_parse_schedule_hhmm(
+                sleep_st.state if sleep_st else None, SCHEDULE_DEFAULT_SLEEP
+            ),
+        )
+        LOGGER.info(
+            "Schedule migrated from helpers %s_* → storage (%s)",
+            prefix,
+            self.entry.entry_id,
+        )
 
+    def _ensure_schedule_listeners(self) -> None:
+        """Слушаем presence: слоты теперь в storage, не в input_*."""
+        persons = _normalize_entity_list(self.opt(CONF_PRESENCE_ENTITY))
         if self._schedule_helpers_unsub:
             try:
                 self._schedule_helpers_unsub()
             except Exception:
                 pass
             self._schedule_helpers_unsub = None
+        if not persons:
+            return
 
         async def _on_change(_event) -> None:
             await self.trigger_once(force=True)
 
         self._schedule_helpers_unsub = async_track_state_change_event(
-            self.hass, entities, _on_change
+            self.hass, persons, _on_change
         )
 
     async def _schedule_poll(self, _now) -> None:
@@ -787,12 +808,7 @@ class SmartOffsetController:
         return True
 
     async def _maybe_apply_builtin_schedule(self) -> bool:
-        """Применить слоты comfort/sleep/eco по тумблеру комнаты.
-
-        Заменяет HA automation «Управление Smart Thermostat по времени…».
-        """
-        if not self._schedule_prefix():
-            return False
+        """Применить слоты comfort/sleep/eco из storage записи."""
         try:
             from homeassistant.util import dt as dt_util
 
@@ -800,7 +816,6 @@ class SmartOffsetController:
         except Exception:
             now_local = datetime.now().astimezone()
 
-        # away только при уверенных person-состояниях (как automation)
         persons = _normalize_entity_list(self.opt(CONF_PRESENCE_ENTITY))
         away = False
         if persons:
@@ -820,8 +835,10 @@ class SmartOffsetController:
             schedule_enabled=self._schedule_enabled(),
             away=away,
             now_hm=f"{now_local.hour:02d}:{now_local.minute:02d}",
-            comfort_hm=self._schedule_helper_time("comfort", "07:00"),
-            sleep_hm=self._schedule_helper_time("sleep", "21:00"),
+            comfort_hm=self._schedule_slot_hm(
+                "comfort", SCHEDULE_DEFAULT_COMFORT
+            ),
+            sleep_hm=self._schedule_slot_hm("sleep", SCHEDULE_DEFAULT_SLEEP),
             month=int(now_local.month),
             outdoor_temp=outdoor,
             summer_months=SCHEDULE_SUMMER_MONTHS,

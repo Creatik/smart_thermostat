@@ -5,19 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.1] - 2026-11-15
+
+### Fixed
+- Расписание на `entry_id` в storage — без хардкода `climate.radiator_*`
+  конкретной семьи; legacy `input_*` мигрируют один раз.
+
 ## [2.4.0] - 2026-11-15
 
 ### Added
-- Встроенное расписание в контроллере: слоты comfort/sleep + тумблер
-  `…_schedule`, away → eco, летний гейт (улица ≥ 18°C). Внешняя HA
-  automation больше не нужна (`plans/builtin-schedule.md`).
-- `last_action = schedule_apply`, минутный poll и слушатели helpers.
+- Встроенное расписание: comfort/sleep + eco при уходе, летний гейт.
+- `last_action = schedule_apply`, минутный poll.
 
 ### Fixed
-- `eco_delta` не складывается с пресетом `eco`/`away` (двойное эко).
-
-### Changed
-- `SCHEDULE_ROOM_PREFIX` общий для time/switch/controller.
+- `eco_delta` не складывается с пресетом `eco`/`away`.
 
 ## [2.3.0] - 2026-11-03
 

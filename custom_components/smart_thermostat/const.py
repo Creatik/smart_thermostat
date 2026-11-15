@@ -438,12 +438,15 @@ SCHEDULE_SUMMER_MONTHS = frozenset({6, 7, 8})
 SCHEDULE_SUMMER_OUTDOOR_MAX = 18.0   # °C: график только при улице строго ниже
 SCHEDULE_POLL_SEC = 60               # проверка границ слотов чаще основного тика
 
-# Климат → префикс помощников расписания (time.py / switch.py / controller).
-SCHEDULE_ROOM_PREFIX = {
+# Только миграция старых input_* помощников (ранние установки).
+# Новые комнаты хранят слоты в storage интеграции — без entity_id семьи.
+SCHEDULE_HELPER_PREFIX_LEGACY = {
     "climate.radiator_detskaia": "st_det",
     "climate.radiator_gostinaia": "st_gos",
     "climate.radiator_spalnia": "st_spa",
 }
+SCHEDULE_DEFAULT_COMFORT = "07:00"
+SCHEDULE_DEFAULT_SLEEP = "21:00"
 
 # Скачок цели по расписанию (эко 18 ↔ комфорт 23).
 # Факт из log_server (25.10–01.11): в 05:00 цель → 23 при offset ≈ −6 →

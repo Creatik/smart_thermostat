@@ -39,7 +39,7 @@ Default 45. Вкл: `learned_preheat_enable` (default on).
 
 ## 4. Настройка
 
-1. person.dmitrii_iurevich (+ семья)
+1. `person.*` / tracker семьи (опция presence)
 2. свет / чайник / motion
 3. «Учить график…» + «За сколько минут…»
 4. Экономить, когда никого нет

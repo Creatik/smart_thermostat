@@ -600,6 +600,46 @@ class OffsetStorage:
             entry_data["preset"] = str(preset)
         await self.async_save()
 
+    # ========== ВСТРОЕННОЕ РАСПИСАНИЕ (на запись, без entity_id семьи) ==========
+
+    def has_schedule_config(self, entry_id: str) -> bool:
+        """True, если блок schedule уже писали (миграция / UI)."""
+        return isinstance(self._data.get(entry_id, {}).get("schedule"), dict)
+
+    def get_schedule(self, entry_id: str) -> Dict[str, Any]:
+        """Слоты расписания: enabled / comfort / sleep (HH:MM)."""
+        from .const import SCHEDULE_DEFAULT_COMFORT, SCHEDULE_DEFAULT_SLEEP
+
+        raw = self._data.get(entry_id, {}).get("schedule")
+        if not isinstance(raw, dict):
+            raw = {}
+        return {
+            "enabled": bool(raw.get("enabled", False)),
+            "comfort": str(raw.get("comfort") or SCHEDULE_DEFAULT_COMFORT),
+            "sleep": str(raw.get("sleep") or SCHEDULE_DEFAULT_SLEEP),
+        }
+
+    async def set_schedule(
+        self,
+        entry_id: str,
+        *,
+        enabled: bool | None = None,
+        comfort: str | None = None,
+        sleep: str | None = None,
+    ) -> None:
+        """Обновить поля расписания (частично)."""
+        async with self._lock:
+            entry_data = self._data.setdefault(entry_id, {})
+            cur = dict(entry_data.get("schedule") or {})
+            if enabled is not None:
+                cur["enabled"] = bool(enabled)
+            if comfort is not None:
+                cur["comfort"] = str(comfort)
+            if sleep is not None:
+                cur["sleep"] = str(sleep)
+            entry_data["schedule"] = cur
+        await self.async_save()
+
     # ========== AUTO-TUNE И СЧЁТЧИК ЗАПИСЕЙ УСТАВКИ ==========
 
     def get_learn_rate_slow(self, entry_id: str) -> Optional[dict]:
