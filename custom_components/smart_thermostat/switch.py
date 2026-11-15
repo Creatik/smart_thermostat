@@ -11,17 +11,10 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.helpers.event import async_track_state_change_event
 
-from .const import DOMAIN, SIGNAL_UPDATE, CONF_CLIMATE
+from .const import DOMAIN, SIGNAL_UPDATE, CONF_CLIMATE, SCHEDULE_ROOM_PREFIX
 from .helpers import thermostat_device_label
 
 _LOGGER = logging.getLogger(__name__)
-
-# Тот же ключ, что у часов в time.py. Незнакомая головка не получает тумблер.
-_ROOM_PREFIX = {
-    "climate.radiator_detskaia": "st_det",
-    "climate.radiator_gostinaia": "st_gos",
-    "climate.radiator_spalnia": "st_spa",
-}
 
 
 def _device_info(hass: HomeAssistant, entry: ConfigEntry) -> DeviceInfo:
@@ -42,7 +35,7 @@ def _device_info(hass: HomeAssistant, entry: ConfigEntry) -> DeviceInfo:
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback):
     controller = hass.data[DOMAIN][entry.entry_id]
     entities: list[SwitchEntity] = [SmartOffsetBoostSwitch(hass, entry, controller)]
-    prefix = _ROOM_PREFIX.get(entry.data.get(CONF_CLIMATE) or "")
+    prefix = SCHEDULE_ROOM_PREFIX.get(entry.data.get(CONF_CLIMATE) or "")
     if prefix:
         entities.append(
             ScheduleEnableSwitch(hass, entry, f"input_boolean.{prefix}_schedule")

@@ -187,6 +187,12 @@ class Feedforward:
             return 0.0
         if self.is_present():
             return 0.0
+        # Пресет eco/away уже держит низкую цель — не складывать с eco_offset
+        # (раньше automation ставила eco, а feedforward ещё −3 → ~16°C).
+        if self.storage is not None and self.entry_id:
+            preset = self.storage.get_preset(self.entry_id)
+            if preset in ("eco", "away"):
+                return 0.0
         return float(self._opt(CONF_ECO_OFFSET) or 0.0)
 
     def get_outdoor_temp(self) -> Optional[float]:

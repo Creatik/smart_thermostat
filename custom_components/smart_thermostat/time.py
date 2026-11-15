@@ -16,17 +16,10 @@ from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_track_state_change_event
 
-from .const import CONF_CLIMATE, DOMAIN
+from .const import CONF_CLIMATE, DOMAIN, SCHEDULE_ROOM_PREFIX
 from .helpers import thermostat_device_label
 
 _LOGGER = logging.getLogger(__name__)
-
-# Климат → префикс помощников. Незнакомая запись не делит чужое время.
-_ROOM_PREFIX = {
-    "climate.radiator_detskaia": "st_det",
-    "climate.radiator_gostinaia": "st_gos",
-    "climate.radiator_spalnia": "st_spa",
-}
 
 # key, суффикс помощника, icon, запасное время.
 # Сон 21:00 — на два часа раньше прежнего отхода в 23:00.
@@ -57,7 +50,7 @@ async def async_setup_entry(
     if entry.entry_id not in hass.data[DOMAIN]:
         return
     climate = entry.data.get(CONF_CLIMATE)
-    prefix = _ROOM_PREFIX.get(climate or "")
+    prefix = SCHEDULE_ROOM_PREFIX.get(climate or "")
     if prefix is None:
         _LOGGER.warning(
             "Нет своего расписания для %s — слоты времени не созданы", climate

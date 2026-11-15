@@ -1038,6 +1038,83 @@ def schedule_target_step(
     return "up" if delta > 0 else "down"
 
 
+def parse_schedule_hhmm(raw: str | None, fallback: str) -> str:
+    """Нормализовать ``HH:MM`` / ``HH:MM:SS`` к ``HH:MM``."""
+    text = (raw or "").strip()
+    if not text or text in ("unknown", "unavailable", "none"):
+        text = fallback
+    m = _HHMM_RE.match(text)
+    if not m:
+        m = _HHMM_RE.match(fallback)
+        if not m:
+            return "07:00"
+    return f"{int(m.group(1)):02d}:{m.group(2)}"
+
+
+def schedule_slot_mode(
+    now_hm: str,
+    comfort_hm: str,
+    sleep_hm: str,
+) -> str:
+    """Слот суток по границам комфорт/сон: ``comfort`` или ``sleep``.
+
+    Интервал комфорта — полуоткрытый ``[comfort, sleep)``. Если сон раньше
+    комфорта (через полночь) — комфорт ``[comfort, 24h) ∪ [00:00, sleep)``.
+    """
+    now = parse_schedule_hhmm(now_hm, "12:00")
+    comfort = parse_schedule_hhmm(comfort_hm, "07:00")
+    sleep = parse_schedule_hhmm(sleep_hm, "21:00")
+    if comfort < sleep:
+        return "comfort" if comfort <= now < sleep else "sleep"
+    return "comfort" if now >= comfort or now < sleep else "sleep"
+
+
+def schedule_summer_blocks(
+    month: int,
+    outdoor_temp: float | None,
+    *,
+    summer_months: frozenset[int] | set[int] | tuple[int, ...] = (6, 7, 8),
+    outdoor_max: float = 18.0,
+) -> bool:
+    """True = лето и улица недостаточно холодная → график цель не двигает."""
+    if int(month) not in set(summer_months):
+        return False
+    if outdoor_temp is None:
+        return True
+    try:
+        return float(outdoor_temp) >= float(outdoor_max) - 1e-9
+    except (TypeError, ValueError):
+        return True
+
+
+def schedule_desired_mode(
+    *,
+    schedule_enabled: bool,
+    away: bool,
+    now_hm: str,
+    comfort_hm: str,
+    sleep_hm: str,
+    month: int,
+    outdoor_temp: float | None,
+    summer_months: frozenset[int] | set[int] | tuple[int, ...] = (6, 7, 8),
+    outdoor_max: float = 18.0,
+) -> str | None:
+    """Желаемый режим встроенного расписания.
+
+    Returns:
+        ``comfort`` / ``sleep`` / ``eco`` или ``None`` (тумблер выкл / лето).
+    """
+    if not schedule_enabled:
+        return None
+    if schedule_summer_blocks(
+        month, outdoor_temp, summer_months=summer_months, outdoor_max=outdoor_max
+    ):
+        return None
+    if away:
+        return "eco"
+    return schedule_slot_mode(now_hm, comfort_hm, sleep_hm)
+
+
 def should_arrival_warmup(
     *,
     present: bool,

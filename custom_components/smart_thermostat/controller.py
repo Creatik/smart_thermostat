@@ -47,6 +47,9 @@ from .helpers import (
     heating_rate_sample as _heating_rate_sample,
     ema_heating_rate as _ema_heating_rate,
     schedule_target_step as _schedule_target_step,
+    schedule_desired_mode as _schedule_desired_mode,
+    parse_schedule_hhmm as _parse_schedule_hhmm,
+    state_means_home as _state_means_home,
     should_arrival_warmup as _should_arrival_warmup,
     window_regime_offset as _window_regime_offset,
     window_control_target as _window_control_target,
@@ -70,10 +73,13 @@ class SmartOffsetController:
         self.storage = storage
 
         self.unsub = None
+        self._schedule_unsub = None
+        self._schedule_helpers_unsub = None
         self._startup_attempts = 0
         self._sensor_retry_unsub = None
         self._sensor_retry_count = 0
         self._sensor_entities_cache: list[str] = []
+        self._last_schedule_mode: Optional[str] = None
 
         # runtime state
         self.last_set: Optional[float] = None
@@ -324,6 +330,10 @@ class SmartOffsetController:
         self.unsub = async_track_time_interval(
             self.hass, self._tick, timedelta(seconds=interval)
         )
+        self._schedule_unsub = async_track_time_interval(
+            self.hass, self._schedule_poll, timedelta(seconds=SCHEDULE_POLL_SEC)
+        )
+        self._ensure_schedule_helper_listeners()
         
         # ЗАТЕМ делаем один немедленный тик для быстрой инициализации
         await self._tick(None)
@@ -341,6 +351,15 @@ class SmartOffsetController:
         if self.unsub:
             self.unsub()
             self.unsub = None
+        if self._schedule_unsub:
+            self._schedule_unsub()
+            self._schedule_unsub = None
+        if self._schedule_helpers_unsub:
+            try:
+                self._schedule_helpers_unsub()
+            except Exception:
+                pass
+            self._schedule_helpers_unsub = None
 
         await self.storage.set_heating_rate(
             self.entry.entry_id, self._heating_rate, reason="shutdown"
@@ -672,6 +691,171 @@ class SmartOffsetController:
         self._reset_stability_tracking()
         await self.trigger_once(force=True)
         self._notify()
+
+    # -------------------------
+    # встроенное расписание (вместо HA automation)
+    # -------------------------
+    def _schedule_prefix(self) -> Optional[str]:
+        climate = self.entry.data.get(CONF_CLIMATE) or ""
+        return SCHEDULE_ROOM_PREFIX.get(str(climate))
+
+    def _schedule_enabled(self) -> bool:
+        prefix = self._schedule_prefix()
+        if not prefix:
+            return False
+        return self.hass.states.is_state(f"input_boolean.{prefix}_schedule", "on")
+
+    def _schedule_helper_time(self, suffix: str, fallback: str) -> str:
+        prefix = self._schedule_prefix()
+        if not prefix:
+            return _parse_schedule_hhmm(None, fallback)
+        st = self.hass.states.get(f"input_datetime.{prefix}_{suffix}")
+        raw = st.state if st is not None else None
+        return _parse_schedule_hhmm(raw if isinstance(raw, str) else None, fallback)
+
+    def _ensure_schedule_helper_listeners(self) -> None:
+        prefix = self._schedule_prefix()
+        if not prefix:
+            return
+        entities = [
+            f"input_boolean.{prefix}_schedule",
+            f"input_datetime.{prefix}_comfort",
+            f"input_datetime.{prefix}_sleep",
+        ]
+        persons = _normalize_entity_list(self.opt(CONF_PRESENCE_ENTITY))
+        entities.extend(persons)
+
+        if self._schedule_helpers_unsub:
+            try:
+                self._schedule_helpers_unsub()
+            except Exception:
+                pass
+            self._schedule_helpers_unsub = None
+
+        async def _on_change(_event) -> None:
+            await self.trigger_once(force=True)
+
+        self._schedule_helpers_unsub = async_track_state_change_event(
+            self.hass, entities, _on_change
+        )
+
+    async def _schedule_poll(self, _now) -> None:
+        """Минутный опрос границ слотов (основной тик чаще 3–4 мин)."""
+        try:
+            changed = await self._maybe_apply_builtin_schedule()
+            if changed:
+                await self.trigger_once(force=True)
+        except Exception:
+            LOGGER.exception(
+                "schedule_poll failed for %s", self.entry.entry_id
+            )
+
+    async def _quiet_set_preset(self, preset: str) -> bool:
+        """Сменить пресет без повторного входа в тик."""
+        if preset not in PRESET_MODES:
+            return False
+        cur = self.active_preset() or PRESET_NONE
+        if cur == preset:
+            return False
+        await self.storage.set_preset(self.entry.entry_id, preset)
+        self._reset_stability_tracking()
+        return True
+
+    async def _quiet_set_room_target(self, temperature: float) -> bool:
+        """Как climate.set_temperature: цель + сброс пресета, без re-entrancy."""
+        try:
+            target = round(float(temperature), 1)
+        except (TypeError, ValueError):
+            return False
+        cur_preset = self.active_preset()
+        try:
+            cur_target = float(self.opt(CONF_ROOM_TARGET))
+        except (TypeError, ValueError):
+            cur_target = None
+        same_temp = cur_target is not None and abs(cur_target - target) < 0.05
+        if same_temp and not cur_preset:
+            return False
+        if cur_preset:
+            await self.storage.set_preset(self.entry.entry_id, PRESET_NONE)
+        if not same_temp:
+            new_options = dict(self.entry.options)
+            new_options[CONF_ROOM_TARGET] = target
+            self.hass.config_entries.async_update_entry(
+                self.entry, options=new_options
+            )
+        self._reset_stability_tracking()
+        return True
+
+    async def _maybe_apply_builtin_schedule(self) -> bool:
+        """Применить слоты comfort/sleep/eco по тумблеру комнаты.
+
+        Заменяет HA automation «Управление Smart Thermostat по времени…».
+        """
+        if not self._schedule_prefix():
+            return False
+        try:
+            from homeassistant.util import dt as dt_util
+
+            now_local = dt_util.now()
+        except Exception:
+            now_local = datetime.now().astimezone()
+
+        # away только при уверенных person-состояниях (как automation)
+        persons = _normalize_entity_list(self.opt(CONF_PRESENCE_ENTITY))
+        away = False
+        if persons:
+            unsure = False
+            anyone_home = False
+            for ent in persons:
+                st = self.hass.states.get(ent)
+                if st is None or st.state in ("unknown", "unavailable", "none", ""):
+                    unsure = True
+                    continue
+                if _state_means_home(st.state):
+                    anyone_home = True
+            away = (not anyone_home) and (not unsure)
+
+        outdoor = self.ff.get_outdoor_temp() if self.ff is not None else None
+        mode = _schedule_desired_mode(
+            schedule_enabled=self._schedule_enabled(),
+            away=away,
+            now_hm=f"{now_local.hour:02d}:{now_local.minute:02d}",
+            comfort_hm=self._schedule_helper_time("comfort", "07:00"),
+            sleep_hm=self._schedule_helper_time("sleep", "21:00"),
+            month=int(now_local.month),
+            outdoor_temp=outdoor,
+            summer_months=SCHEDULE_SUMMER_MONTHS,
+            outdoor_max=SCHEDULE_SUMMER_OUTDOOR_MAX,
+        )
+        if mode is None:
+            self._last_schedule_mode = None
+            return False
+
+        changed = False
+        if mode == "eco":
+            changed = await self._quiet_set_preset(PRESET_ECO)
+        elif mode == "comfort":
+            comfort = float(
+                self.opt(CONF_PRESET_COMFORT_TEMP) or DEFAULT_PRESET_COMFORT_TEMP
+            )
+            changed = await self._quiet_set_room_target(comfort)
+        elif mode == "sleep":
+            sleep = float(
+                self.opt(CONF_PRESET_SLEEP_TEMP) or DEFAULT_PRESET_SLEEP_TEMP
+            )
+            changed = await self._quiet_set_room_target(sleep)
+
+        if changed:
+            LOGGER.info(
+                "ST schedule %s → %s (away=%s)",
+                self.entry.entry_id,
+                mode,
+                away,
+            )
+            self.last_action = "schedule_apply"
+            self._notify()
+        self._last_schedule_mode = mode
+        return changed
 
     # -------------------------
     # listeners / helpers
@@ -2679,6 +2863,14 @@ class SmartOffsetController:
     async def _tick(self, _):
         try:
             now_mono = self.hass.loop.time()
+
+            # Сначала слоты расписания — _read_inputs берёт уже новую цель.
+            try:
+                await self._maybe_apply_builtin_schedule()
+            except Exception:
+                LOGGER.exception(
+                    "builtin schedule failed for %s", self.entry.entry_id
+                )
 
             inp = await self._read_inputs(now_mono)
             if not inp:

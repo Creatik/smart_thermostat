@@ -76,6 +76,7 @@ ACTION_MAPPING = {
     "window_open": "window",
     "boost": "boost",
     "schedule_boost": "schedule_boost",
+    "schedule_apply": "schedule_apply",
     "target_step_warmup": "warmup",
     "arrival_warmup": "arrival_warmup",
     "heat_source_absent": "heat_source_absent",

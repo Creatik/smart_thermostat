@@ -432,6 +432,19 @@ HEATING_RATE_DTEMP_MIN = 0.01      # мин. |ΔT|, °C
 # boost держит TRV=max, дальше active_control с полом TRV догоняет.
 PREHEAT_BOOST_SEC = 1200
 
+# Встроенное расписание (слоты input_datetime + тумблер …_schedule).
+# Летом при тёплой улице график не двигает цель (как внешняя automation).
+SCHEDULE_SUMMER_MONTHS = frozenset({6, 7, 8})
+SCHEDULE_SUMMER_OUTDOOR_MAX = 18.0   # °C: график только при улице строго ниже
+SCHEDULE_POLL_SEC = 60               # проверка границ слотов чаще основного тика
+
+# Климат → префикс помощников расписания (time.py / switch.py / controller).
+SCHEDULE_ROOM_PREFIX = {
+    "climate.radiator_detskaia": "st_det",
+    "climate.radiator_gostinaia": "st_gos",
+    "climate.radiator_spalnia": "st_spa",
+}
+
 # Скачок цели по расписанию (эко 18 ↔ комфорт 23).
 # Факт из log_server (25.10–01.11): в 05:00 цель → 23 при offset ≈ −6 →
 # TRV ≈ 18 при комнате ≈ 21 → клапан закрыт; offset догоняет ~час,
