@@ -40,6 +40,11 @@ git status
 GitHub Release. Тело релиза — весь `RELEASE_NOTES.md`. Отдельный
 `gh release create` не нужен.
 
+Push `main` с новым `RELEASE_NOTES.md` параллельно запускает
+`sync-release-notes`. Если тег ещё не успел создать Release, этот чек
+красный. Релиз при этом уже собран тегом — смотреть страницу Release,
+не перетегивать и не пушить заново ради зелёного чека.
+
 ## Не делать
 
 - `git push --force` на `main` и перезапись уже выпущенного тега.
