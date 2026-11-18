@@ -1,0 +1,47 @@
+---
+description: Читать перед коммитом, тегом и push на GitHub.
+alwaysApply: false
+---
+
+# GitHub — коммит, тег, релиз
+
+Репозиторий: `git@github.com:Creatik/smart_thermostat.git`, ветка `main`.
+Коммит, тег и push **только по явной просьбе**. Секреты, дампы
+`log_server/ha_dump_*`, `.storage` и `.codeassistant` не коммитить.
+
+## Номер
+
+Патч контура без новой опции — следующий патч (`2.4.1` → `2.4.2`).
+Новая возможность — минор. Один номер в трёх местах:
+
+1. `custom_components/smart_thermostat/manifest.json` → `version`
+2. Первая секция `RELEASE_NOTES.md` (`## vX.Y.Z — …`)
+3. Тег `vX.Y.Z` на этом же коммите
+
+## Коммит и тег
+
+Сообщение коммита: `vX.Y.Z: зачем`, по-русски.
+Тег аннотированный, сообщение на английском, как у `v2.4.1`.
+
+```bash
+git add <только файлы этого релиза>
+git commit -m "$(cat <<'EOF'
+vX.Y.Z: зачем.
+
+EOF
+)"
+git tag -a vX.Y.Z -m "vX.Y.Z: short english summary"
+git push origin HEAD
+git push origin vX.Y.Z
+git status
+```
+
+Тег `v*` запускает `.github/workflows/release.yaml`: zip компонента и
+GitHub Release. Тело релиза — весь `RELEASE_NOTES.md`. Отдельный
+`gh release create` не нужен.
+
+## Не делать
+
+- `git push --force` на `main` и перезапись уже выпущенного тега.
+- Пуш без тега, если просили релиз: без `v*` zip и Release не появятся.
+- Коммит до зелёных тестов затронутых модулей.

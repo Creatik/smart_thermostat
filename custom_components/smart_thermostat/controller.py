@@ -38,7 +38,9 @@ from .helpers import (
     trv_heat_flowing as _trv_heat_flowing,
     usable_trv_local as _usable_trv_local,
     local_is_stuck as _local_is_stuck,
+    trv_write_gate as _trv_write_gate,
     weather_suppressed as _weather_suppressed,
+    weather_release_room_short as _weather_release_room_short,
     ttt_sample_mpd as _ttt_sample_mpd,
     blend_minutes_per_degree as _blend_minutes_per_degree,
     should_cold_start_jerk as _should_cold_start_jerk,
@@ -128,6 +130,8 @@ class SmartOffsetController:
         self._local_invalid_logged = False
         # погода снята, пока клапан упёрт в максимум
         self._weather_suppressed = False
+        # ранняя посадка уже срезала уставку — не открывать обратно на кванте
+        self._approach_hold = False
 
         # stability tracking
         self._last_room_target: Optional[float] = None
@@ -190,6 +194,8 @@ class SmartOffsetController:
             self.hass, self.opt, storage=self.storage, entry_id=self.entry.entry_id
         )
 
+        # антиспам записи TRV: монотонные метки успешных set_temperature
+        self._trv_write_times: list[float] = []
         # stuck logic
         self._force_next_control = False
         self._stuck_active = False
@@ -637,7 +643,16 @@ class SmartOffsetController:
                 TARGET_STEP_VALVE_MARGIN,
             )
 
-        # 2) Авто-boost: сразу TRV=max и открыть клапан на TARGET_STEP_BOOST_SEC
+        # 2) Авто-boost: сразу TRV=max и открыть клапан на TARGET_STEP_BOOST_SEC.
+        # Мёртвая голова (local −0.01 / unavailable) максимум не получает:
+        # пол offset уже поднят, активный контур откроет клапан, когда датчик оживёт.
+        if self._trv_radio_dead(inp.climate_entity):
+            LOGGER.info(
+                "Schedule step up %.1f→%.1f: boost пропущен, голова не отвечает",
+                prev,
+                cur,
+            )
+            return
         if not self.boost_active:
             self._schedule_boost = True
             self.last_action = "target_step_warmup"
@@ -1017,7 +1032,9 @@ class SmartOffsetController:
         self._valve_exercise_until = self.hass.loop.time() + float(exercise_sec)
         self.last_action = "valve_exercise"
         self.last_target_trv = t_trv
-        await self._set_trv_temperature(inp.climate_entity, t_trv)
+        await self._set_trv_temperature(
+            inp.climate_entity, t_trv, urgency="forced"
+        )
         # прокрутка клапана требует открытого клапана
         await self._set_valve_switch(True, force=True)
 
@@ -1181,10 +1198,73 @@ class SmartOffsetController:
         LOGGER.info("Window closed (после debounce)")
         return True
 
-    async def _set_trv_temperature(self, entity_id: str, temp: float) -> bool:
-        now = self.hass.loop.time()
+    def _trv_writes_last_hour(self, now: float) -> int:
+        cutoff = float(now) - 3600.0
+        self._trv_write_times = [t for t in self._trv_write_times if t >= cutoff]
+        return len(self._trv_write_times)
 
-        if self.last_set is not None and abs(temp - self.last_set) < 0.01:
+    def _trv_radio_dead(self, entity_id: str) -> bool:
+        """Голова молчит / врёт (−0.01) — не долбить радио.
+
+        Yandex TRV: после зависания local=-0.01, state=OFF, а ST продолжал
+        слать уставки и добивал батарею/стек.
+        """
+        if self._local_stuck:
+            return True
+        state = self.hass.states.get(entity_id)
+        if state is None or state.state in ("unavailable", "unknown"):
+            return True
+        raw = None
+        for attr in ("current_temperature", "local_temperature"):
+            raw = _to_float((state.attributes or {}).get(attr))
+            if raw is not None:
+                break
+        if raw is None:
+            return False
+        return raw < float(LOCAL_TEMP_MIN) or raw > float(LOCAL_TEMP_MAX)
+
+    async def _set_trv_temperature(
+        self, entity_id: str, temp: float, *, urgency: str = "normal"
+    ) -> bool:
+        """Писать уставку на TRV с единым антиспамом.
+
+        urgency: ``normal`` | ``urgent`` (недогрев/boost) | ``forced`` (прокрутка)
+        | ``shutdown`` (одна команда минимума при выключении).
+        Не шлём, если на устройстве уже то же или оба числа у упора клапана;
+        urgent не чаще 3 мин; потолок команд/час на всех, кроме shutdown;
+        при −0.01/stuck — раз в час.
+        """
+        now = self.hass.loop.time()
+        state = self.hass.states.get(entity_id)
+        climate_state = None if state is None else state.state
+        cooldown = float(self.opt(CONF_COOLDOWN_SEC) or DEFAULT_COOLDOWN_SEC)
+        reported = None
+        if state is not None:
+            reported = _to_float((state.attributes or {}).get("temperature"))
+            if reported is None:
+                reported = self.trv_reported_setpoint
+        gate = _trv_write_gate(
+            climate_state=climate_state,
+            last_set=self.last_set,
+            desired=temp,
+            now=now,
+            last_change=self.last_change,
+            cooldown_sec=cooldown,
+            local_stuck=self._trv_radio_dead(entity_id),
+            stuck_resend_sec=float(TRV_STUCK_RESEND_SEC),
+            urgency=urgency,
+            reported_setpoint=reported,
+            reported_eps=float(TRV_REPORTED_EPS),
+            urgent_min_sec=float(TRV_URGENT_MIN_SEC),
+            writes_last_hour=self._trv_writes_last_hour(now),
+            max_writes_per_hour=int(TRV_MAX_WRITES_PER_HOUR),
+            saturate_hi=float(self.opt(CONF_TRV_MAX) or DEFAULT_TRV_MAX),
+            saturate_margin=float(TRV_SATURATED_MARGIN),
+        )
+        if gate is not None:
+            # не затирать более говорящий last_action вызывающего пути
+            if self.last_action in (None, "", "init", "hold", "skipped_no_change"):
+                self.last_action = gate
             return False
 
         try:
@@ -1197,6 +1277,7 @@ class SmartOffsetController:
             old_set = self.last_set
             self.last_set = temp
             self.last_change = now
+            self._trv_write_times.append(now)
             if old_set is not None:
                 self._last_set_direction = (
                     1 if temp > old_set else (-1 if temp < old_set else 0)
@@ -1424,7 +1505,16 @@ class SmartOffsetController:
             and self.last_set <= trv_max - WEATHER_SUPPRESS_RELEASE + 1e-9
         )
         deadband_card = float(self.opt(CONF_DEADBAND) or DEFAULT_DEADBAND)
-        room_short = float(t_room) + deadband_card < float(t_target)
+        # Не deadband: посадка живёт шире, и там возврат надбавки
+        # снова открывает клапан в максимум (детская 18.11, 23↔30).
+        room_short = _weather_release_room_short(
+            t_room,
+            t_target,
+            deadband_card,
+            band_min=APPROACH_BAND_MIN,
+            band_mult=APPROACH_BAND_MULT,
+            hold_extra=APPROACH_HOLD_EXTRA,
+        )
         suppressed = _weather_suppressed(
             self._weather_suppressed, at_max, below_release, room_short
         )
@@ -2058,11 +2148,15 @@ class SmartOffsetController:
     async def _handle_hvac_off(self, inp: Inputs):
         self._cancel_boost()
 
-        # ШАГ 1: минимальная уставка для надёжного закрытия клапана
+        # ШАГ 1: минимальная уставка для надёжного закрытия клапана.
+        # shutdown не режется часовым потолком: клапан должен закрыться
+        # даже после пачки записей. Повтор того же минимума режет dedup.
         trv_min = float(self.opt(CONF_TRV_MIN) or DEFAULT_TRV_MIN)
         step_min = float(self.opt(CONF_STEP_MIN) or DEFAULT_STEP_MIN)
         t_trv = _round_step(trv_min, step_min)
-        await self._set_trv_temperature(inp.climate_entity, t_trv)
+        await self._set_trv_temperature(
+            inp.climate_entity, t_trv, urgency="shutdown"
+        )
 
         # ШАГ 2: клапан закрыть через переключатель (если настроен)
         await self._set_valve_switch(False, force=True)
@@ -2120,6 +2214,9 @@ class SmartOffsetController:
         """
         if self.boost_active:
             return
+        # −0.01 / unavailable: рывок на максимум добивает батарею, тепла не добавляет.
+        if self._trv_radio_dead(inp.climate_entity):
+            return
         e = float(inp.t_effective) - float(inp.t_room)
         local = self._read_trv_local_temp(inp.climate_entity)
         if not _should_cold_start_jerk(
@@ -2170,6 +2267,12 @@ class SmartOffsetController:
         if not self.boost_active or inp.now_mono >= self.boost_until:
             return False
 
+        # Голова врёт или пропала — снять boost, иначе при оживлении сразу уйдёт 30°.
+        if self._trv_radio_dead(inp.climate_entity):
+            self._cancel_boost()
+            self.last_action = "trv_stuck_backoff"
+            return False
+
         e = float(inp.t_effective) - float(inp.t_room)
         local = self._read_trv_local_temp(inp.climate_entity)
         # Холодный старт: тепло подтверждено local И отрыв уже не катастрофа
@@ -2198,7 +2301,9 @@ class SmartOffsetController:
         self._stuck_bias = 0.0
 
         if self.last_set is None or abs(t_trv - self.last_set) >= (step_min - 1e-9):
-            await self._set_trv_temperature(inp.climate_entity, t_trv)
+            await self._set_trv_temperature(
+                inp.climate_entity, t_trv, urgency="urgent"
+            )
 
         # Boost — клапан открыть
         await self._set_valve_switch(True, force=True)
@@ -2281,6 +2386,14 @@ class SmartOffsetController:
             )
             self._pending_offset_delta = 0.0
             self._last_offset_update = inp.now_mono
+        if self._trv_radio_dead(inp.climate_entity):
+            LOGGER.info(
+                "Arrival warmup пропущен: голова не отвечает (room=%.1f, e=%.2f)",
+                inp.t_room,
+                e,
+            )
+            self.last_action = "trv_stuck_backoff"
+            return
         self._arrival_boost = True
         self._last_arrival_boost_mono = inp.now_mono
         self.last_action = "arrival_warmup"
@@ -2349,7 +2462,10 @@ class SmartOffsetController:
                 local_rising=local_rising,
                 predict_max_min=APPROACH_PREDICT_MAX_MIN,
                 rate_min=APPROACH_RATE_MIN,
+                hold=self._approach_hold,
+                hold_extra=APPROACH_HOLD_EXTRA,
             )
+            self._approach_hold = approach_ceil is not None
             if approach_ceil is not None and baseline > approach_ceil + 1e-9:
                 baseline = _round_step(
                     _clamp(approach_ceil, trv_min, trv_max), step_min
@@ -2368,10 +2484,21 @@ class SmartOffsetController:
             if self.last_set is None or abs(baseline - self.last_set) >= (
                 step_min - 1e-9
             ):
-                await self._set_trv_temperature(inp.climate_entity, baseline)
-                self.last_action = (
-                    "deadband_rebase" if target_changed else "deadband_init"
+                # Скачок цели вверх — срочно; вниз/init — через cooldown.
+                urg = (
+                    "urgent"
+                    if target_changed
+                    and self.last_set is not None
+                    and baseline > self.last_set + 1e-9
+                    else "normal"
                 )
+                wrote = await self._set_trv_temperature(
+                    inp.climate_entity, baseline, urgency=urg
+                )
+                if wrote:
+                    self.last_action = (
+                        "deadband_rebase" if target_changed else "deadband_init"
+                    )
             self._reset_stability_tracking()
             return True
 
@@ -2384,14 +2511,17 @@ class SmartOffsetController:
             and self.last_set is not None
             and self.last_set < baseline - 1e-9
         ):
-            await self._set_trv_temperature(inp.climate_entity, baseline)
-            self.last_action = "deadband_rebase"
-            self.last_target_trv = baseline
+            wrote = await self._set_trv_temperature(
+                inp.climate_entity, baseline, urgency="urgent"
+            )
+            if wrote:
+                self.last_action = "deadband_rebase"
+                self.last_target_trv = baseline
             await self._set_valve_switch(True)
             return True
 
         # Ранняя посадка в hold: уставка ещё высокая, батарея горячая —
-        # сразу к потолку (не ждать перелёта / cooldown) и подтянуть offset.
+        # к потолку, но через cooldown (не спамить Zigbee каждую минуту).
         if approach_capped:
             await self._apply_approach_offset(inp, room_rising)
         if (
@@ -2399,9 +2529,10 @@ class SmartOffsetController:
             and self.last_set is not None
             and self.last_set > baseline + 1e-9
         ):
-            await self._set_trv_temperature(inp.climate_entity, baseline)
-            self.last_action = "approach_close"
-            self.last_target_trv = baseline
+            wrote = await self._set_trv_temperature(inp.climate_entity, baseline)
+            if wrote:
+                self.last_action = "approach_close"
+                self.last_target_trv = baseline
             await self._set_valve_switch(False)
             return True
 
@@ -2424,9 +2555,12 @@ class SmartOffsetController:
                     )
                     action = "deadband_step_down"
                 if new_set <= self.last_set - (step_min - 1e-9):
-                    await self._set_trv_temperature(inp.climate_entity, new_set)
-                    self.last_action = action
-                    self.last_target_trv = new_set
+                    wrote = await self._set_trv_temperature(
+                        inp.climate_entity, new_set
+                    )
+                    if wrote:
+                        self.last_action = action
+                        self.last_target_trv = new_set
                     return True
 
         # Распад / trim / stable-learn не трогаем во время freeze после скачка вниз
@@ -2462,7 +2596,6 @@ class SmartOffsetController:
         )
         trv_min = float(self.opt(CONF_TRV_MIN) or DEFAULT_TRV_MIN)
         trv_max = float(self.opt(CONF_TRV_MAX) or DEFAULT_TRV_MAX)
-        cooldown = float(self.opt(CONF_COOLDOWN_SEC) or DEFAULT_COOLDOWN_SEC)
         enable_learning = bool(self.opt(CONF_ENABLE_LEARNING))
 
         heating_alpha = float(self.opt(CONF_HEATING_ALPHA) or DEFAULT_HEATING_ALPHA)
@@ -2518,7 +2651,10 @@ class SmartOffsetController:
                 local_rising=local_rising,
                 predict_max_min=APPROACH_PREDICT_MAX_MIN,
                 rate_min=APPROACH_RATE_MIN,
+                hold=self._approach_hold,
+                hold_extra=APPROACH_HOLD_EXTRA,
             )
+            self._approach_hold = approach_ceil is not None
         landing_active = (
             approach_ceil is not None
             and (t_target + offset) > approach_ceil + 1e-9
@@ -2829,23 +2965,27 @@ class SmartOffsetController:
         ):
             await self._update_heating_rate(t_room, inp.now_mono, heating_alpha)
 
-        # anti spam (перелёт / ранняя посадка: не ждать cooldown)
-        urgent_cap = overshoot_capped or approach_capped
-        if self.last_set is not None:
-            if abs(t_trv - self.last_set) < (step_min - 1e-9):
-                self.last_action = "skipped_no_change"
-                return
-            if (
-                inp.now_mono - self.last_change
-            ) < cooldown and not self._force_next_control and not urgent_cap:
-                self.last_action = "cooldown"
-                return
+        # anti spam: cooldown живёт в _set_trv_temperature.
+        # Перелёт/посадка больше НЕ обходят cooldown (спам 25.5↔26).
+        # Недогрев (e>deadband и рост уставки) / force — urgent.
+        # last_set == расчёт не значит, что голова так стоит. force ставит
+        # сверка reported (backoff уже выдержан) — иначе после батареек
+        # клапан остаётся закрытым при памяти «мы уже слали 30».
+        if (
+            self.last_set is not None
+            and not self._force_next_control
+            and abs(t_trv - self.last_set) < (step_min - 1e-9)
+        ):
+            self.last_action = "skipped_no_change"
+            return
 
+        raising = self.last_set is None or t_trv > self.last_set + 1e-9
+        underheat_raise = raising and e > deadband
         # анти-дребезг (min_on/min_off): не менять направление уставки слишком часто
         if (
             self.last_set is not None
             and not self._force_next_control
-            and not urgent_cap
+            and not underheat_raise
         ):
             desired = t_trv - self.last_set
             if abs(desired) >= (step_min - 1e-9):
@@ -2861,7 +3001,14 @@ class SmartOffsetController:
                         self.last_action = "anti_chatter"
                         return
 
-        success = await self._set_trv_temperature(inp.climate_entity, t_trv)
+        urg = (
+            "urgent"
+            if (underheat_raise or self._force_next_control)
+            else "normal"
+        )
+        success = await self._set_trv_temperature(
+            inp.climate_entity, t_trv, urgency=urg
+        )
         if success:
             if overshoot_capped:
                 self.last_action = "overshoot_close"
@@ -2942,22 +3089,31 @@ class SmartOffsetController:
                 self.heat_delivery = "unknown"
 
             # Верификация уставки: фактическое значение на TRV vs last_set.
-            # Раньше потерянная команда (Zigbee) навсегда блокировала переотправку.
+            # Потерянную Zigbee-команду ловим, но не каждый тик и без
+            # last_set:=reported (иначе 25.5↔26 осцилляция на кванте шага).
             self.trv_reported_setpoint = inp.trv_reported_setpoint
             if (
                 inp.trv_reported_setpoint is not None
                 and self.last_set is not None
                 and abs(inp.trv_reported_setpoint - self.last_set) > 0.5
             ):
-                LOGGER.warning(
-                    "TRV %s: уставка на устройстве %.1f ≠ last_set %.1f — переотправка",
-                    inp.climate_entity,
-                    inp.trv_reported_setpoint,
-                    self.last_set,
-                )
                 self.trv_setpoint_sync = "mismatch"
-                self.last_set = inp.trv_reported_setpoint
-                self._force_next_control = True
+                cooldown = float(
+                    self.opt(CONF_COOLDOWN_SEC) or DEFAULT_COOLDOWN_SEC
+                )
+                if self._local_stuck:
+                    cooldown = max(cooldown, float(TRV_STUCK_RESEND_SEC))
+                elapsed = now_mono - float(self.last_change or 0.0)
+                if elapsed >= cooldown or self.last_change <= 0.0:
+                    LOGGER.warning(
+                        "TRV %s: уставка на устройстве %.1f ≠ last_set %.1f — "
+                        "переотправка (через %.0fs)",
+                        inp.climate_entity,
+                        inp.trv_reported_setpoint,
+                        self.last_set,
+                        elapsed,
+                    )
+                    self._force_next_control = True
             elif inp.trv_reported_setpoint is not None:
                 self.trv_setpoint_sync = "ok"
 
@@ -2967,7 +3123,9 @@ class SmartOffsetController:
                 if self._valve_exercise_active:
                     if inp.now_mono < self._valve_exercise_until:
                         trv_max = float(self.opt(CONF_TRV_MAX) or DEFAULT_TRV_MAX)
-                        await self._set_trv_temperature(inp.climate_entity, trv_max)
+                        await self._set_trv_temperature(
+                            inp.climate_entity, trv_max, urgency="forced"
+                        )
                         self.last_action = "valve_exercise"
                         await self._end_tick(inp, now_mono)
                         return

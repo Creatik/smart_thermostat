@@ -378,6 +378,8 @@ def approach_trv_ceiling(
     local_rising: bool = False,
     predict_max_min: float = 0.0,
     rate_min: float = _APPROACH_RATE_MIN,
+    hold: bool = False,
+    hold_extra: float = 0.0,
 ) -> float | None:
     """Потолок TRV на подходе к цели при уже горячей батарее.
 
@@ -398,6 +400,10 @@ def approach_trv_ceiling(
 
     Потолок = ``room + trv_margin`` (= underheat floor): срезаем лишнее,
     инвариант недогрева не ломаем.
+
+    ``hold``: посадка уже сработала. Пока батарея горячая, полосу ошибки
+    расширяем на ``hold_extra``, чтобы квант датчика на границе не открывал
+    клапан обратно в target+offset (детская 18.11: 23↔30 каждые 4 мин).
     """
     try:
         e = float(error)
@@ -408,7 +414,10 @@ def approach_trv_ceiling(
     if e <= 0:
         return None
     ease = max(float(approach_band_min), float(approach_band_mult) * db)
-    if e > db + ease + 1e-9:
+    limit = db + ease
+    if hold:
+        limit += max(0.0, float(hold_extra))
+    if e > limit + 1e-9:
         return None
     hot = False
     have_local = False
@@ -752,6 +761,117 @@ def usable_trv_local(
     return v
 
 
+def trv_write_gate(
+    *,
+    climate_state: str | None,
+    last_set: float | None,
+    desired: float,
+    now: float,
+    last_change: float,
+    cooldown_sec: float,
+    local_stuck: bool = False,
+    stuck_resend_sec: float = 3600,
+    urgency: str = "normal",
+    reported_setpoint: float | None = None,
+    reported_eps: float = 0.3,
+    urgent_min_sec: float = 180,
+    writes_last_hour: int = 0,
+    max_writes_per_hour: int = 12,
+    saturate_hi: float | None = None,
+    saturate_margin: float = 1.0,
+) -> str | None:
+    """Можно ли слать set_temperature на TRV.
+
+    Возвращает None если писать можно, иначе код отказа:
+    ``trv_unavailable`` / ``no_change`` / ``already_on_device`` /
+    ``cooldown`` / ``trv_stuck_backoff`` / ``rate_limited``.
+
+    urgency:
+      - ``normal`` — полный cooldown
+      - ``urgent`` — недогрев/boost: короткий пол ``urgent_min_sec``, не каждый тик
+      - ``forced`` — прокрутка: без cooldown, но с потолком часа и stuck-backoff
+      - ``shutdown`` — выключение: одна команда минимума, повторы режет dedup
+
+    Бюджет ``max_writes_per_hour`` режет всех, кроме ``shutdown``.
+    Гостиная 16.11: 771 запись/сутки и пик 65/час — ``forced`` обходил потолок,
+    мёртвая голова продолжала получать максимум.
+    ``saturate_hi``: желаемое и уже стоящее оба у упора клапана — не двигать шток.
+    """
+    if climate_state in (None, "unavailable", "unknown"):
+        return "trv_unavailable"
+    try:
+        desired_f = float(desired)
+        now_f = float(now)
+        last = float(last_change or 0.0)
+    except (TypeError, ValueError):
+        return "no_change"
+    # Совпадение с last_set не прячет потерянную команду: после смены
+    # батареек голова поднимается со своей уставкой (спальня 19 при
+    # памяти 30), а сервис HA при этом уже «успел». Если на устройстве
+    # другое число — это не повтор, дальше решают cooldown и потолок.
+    reported_far = False
+    if reported_setpoint is not None:
+        try:
+            reported_far = abs(desired_f - float(reported_setpoint)) > float(
+                reported_eps
+            )
+        except (TypeError, ValueError):
+            reported_far = False
+    if last_set is not None and not reported_far:
+        try:
+            if abs(desired_f - float(last_set)) < 0.01:
+                return "no_change"
+        except (TypeError, ValueError):
+            pass
+    if reported_setpoint is not None:
+        try:
+            if abs(desired_f - float(reported_setpoint)) <= float(reported_eps):
+                return "already_on_device"
+        except (TypeError, ValueError):
+            pass
+    if saturate_hi is not None:
+        try:
+            rail = float(saturate_hi) - float(saturate_margin)
+
+            def _on_rail(value: float | None) -> bool:
+                return value is not None and float(value) >= rail - 1e-9
+
+            if _on_rail(desired_f) and (
+                _on_rail(reported_setpoint) or _on_rail(last_set)
+            ):
+                return "already_on_device"
+        except (TypeError, ValueError):
+            pass
+    # Выключение: повторы уже отсечены dedup / already_on_device.
+    # Потолок часа не должен оставить клапан открытым.
+    if urgency == "shutdown":
+        return None
+    try:
+        if int(writes_last_hour) >= int(max_writes_per_hour) > 0:
+            return "rate_limited"
+    except (TypeError, ValueError):
+        pass
+    try:
+        if local_stuck:
+            cd = max(float(cooldown_sec), float(stuck_resend_sec))
+            if last > 0.0 and (now_f - last) < cd:
+                return "trv_stuck_backoff"
+            return None
+        if urgency == "forced":
+            return None
+        if urgency == "urgent":
+            floor = float(urgent_min_sec)
+            if last > 0.0 and floor > 0.0 and (now_f - last) < floor:
+                return "cooldown"
+            return None
+        cd = float(cooldown_sec)
+        if last > 0.0 and (now_f - last) < cd:
+            return "cooldown"
+    except (TypeError, ValueError):
+        return None
+    return None
+
+
 def local_is_stuck(
     flat_sec: float,
     set_span: float,
@@ -794,6 +914,32 @@ def weather_suppressed(
     if latched and not (below_release and room_short):
         return True
     return False
+
+
+def weather_release_room_short(
+    t_room: float,
+    t_target: float,
+    deadband: float,
+    *,
+    band_min: float,
+    band_mult: float,
+    hold_extra: float,
+) -> bool:
+    """Комната достаточно ниже карточки, чтобы вернуть погодную надбавку.
+
+    Не порог deadband: ранняя посадка живёт в полосе deadband+ease.
+    Если отпустить защёлку там, надбавка раздувает ошибку, полоса
+    посадки кончается и уставка снова бьётся в максимум.
+    """
+    try:
+        room = float(t_room)
+        target = float(t_target)
+        db = abs(float(deadband))
+        ease = max(float(band_min), float(band_mult) * db)
+        extra = max(0.0, float(hold_extra))
+    except (TypeError, ValueError):
+        return False
+    return room + db + ease + extra < target - 1e-9
 
 
 def ttt_sample_mpd(
@@ -1001,6 +1147,10 @@ def should_cold_start_jerk(
     except (TypeError, ValueError):
         return False
     if e < float(cold_error):
+        return False
+    # Нет живого local (−0.01 / обрыв): рывок на 30° только крутит мотор.
+    # Пол недогрева в active всё равно держит клапан открытым, когда голова жива.
+    if t_local is None:
         return False
     # Уставка уже на максимуме — повторный рывок комнату не греет
     # (гостиная 07.11: TRV 30 и local −0.01, рывок каждые 30 мин).

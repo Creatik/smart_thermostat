@@ -111,6 +111,60 @@ class ApproachTrvCeilingTests(unittest.TestCase):
         self.assertIsNotNone(ceil)
         self.assertAlmostEqual(ceil, floor, places=6)
 
+    def test_hold_keeps_ceiling_just_past_band(self):
+        """Детская 18.11: e чуть за полосой, local горячий — не открывать 30."""
+        db = 0.3
+        # полоса = 0.3+1.0 = 1.3; e=1.5 ещё внутри гистерезиса 0.5
+        self.assertIsNone(
+            approach_trv_ceiling(
+                21.5,
+                error=1.5,
+                deadband=db,
+                t_local=25.0,
+                local_margin=LOCAL_MARGIN,
+                trv_margin=TRV_MARGIN,
+            )
+        )
+        ceil = approach_trv_ceiling(
+            21.5,
+            error=1.5,
+            deadband=db,
+            t_local=25.0,
+            local_margin=LOCAL_MARGIN,
+            trv_margin=TRV_MARGIN,
+            hold=True,
+            hold_extra=0.5,
+        )
+        self.assertAlmostEqual(ceil, 21.5 + TRV_MARGIN, places=6)
+
+    def test_hold_releases_when_room_falls_further(self):
+        self.assertIsNone(
+            approach_trv_ceiling(
+                21.0,
+                error=2.0,
+                deadband=0.3,
+                t_local=25.0,
+                local_margin=LOCAL_MARGIN,
+                trv_margin=TRV_MARGIN,
+                hold=True,
+                hold_extra=0.5,
+            )
+        )
+
+    def test_hold_does_not_keep_cold_battery(self):
+        self.assertIsNone(
+            approach_trv_ceiling(
+                21.5,
+                error=1.5,
+                deadband=0.3,
+                t_local=21.6,
+                local_margin=LOCAL_MARGIN,
+                trv_margin=TRV_MARGIN,
+                hold=True,
+                hold_extra=0.5,
+            )
+        )
+
     def test_mid_band_with_hot_local(self):
         """e=1.0 в полосе (≤1.5) + local горячий → потолок есть."""
         ceil = approach_trv_ceiling(

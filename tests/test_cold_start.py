@@ -19,6 +19,7 @@ from helpers import (  # noqa: E402
     trv_heat_flowing,
     usable_trv_local,
     weather_suppressed,
+    weather_release_room_short,
 )
 
 
@@ -55,9 +56,9 @@ class ColdStartJerkTests(unittest.TestCase):
             )
         )
 
-    def test_jerk_when_local_missing_and_gap_large(self):
-        """Мёртвый local не считается «тепло уже идёт»."""
-        self.assertTrue(
+    def test_no_jerk_when_local_missing(self):
+        """−0.01 / обрыв local: рывок на 30° сажает батарею и не греет."""
+        self.assertFalse(
             should_cold_start_jerk(
                 2.7, t_room=20.3, t_local=None, cold_error=2.0, at_trv_max=False
             )
@@ -112,6 +113,29 @@ class LocalAndWeatherTests(unittest.TestCase):
         # посадка уронила set, но комната уже у карточки — надбавку не возвращать
         self.assertTrue(weather_suppressed(True, False, True, room_short=False))
         self.assertFalse(weather_suppressed(True, False, True, room_short=True))
+
+    def test_weather_stays_off_while_landing(self):
+        """Детская: room 22.1 / цель 23 — это посадка, не повод вернуть надбавку."""
+        self.assertFalse(
+            weather_release_room_short(
+                22.1,
+                23.0,
+                0.3,
+                band_min=1.0,
+                band_mult=2.0,
+                hold_extra=0.5,
+            )
+        )
+        self.assertTrue(
+            weather_release_room_short(
+                20.0,
+                23.0,
+                0.3,
+                band_min=1.0,
+                band_mult=2.0,
+                hold_extra=0.5,
+            )
+        )
 
 
 if __name__ == "__main__":

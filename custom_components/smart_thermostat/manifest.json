@@ -17,5 +17,5 @@
     "custom_components.smart_thermostat"
   ],
   "requirements": [],
-  "version": "2.4.1"
+  "version": "2.4.2"
 }
